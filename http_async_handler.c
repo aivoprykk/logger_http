@@ -47,8 +47,8 @@ static SemaphoreHandle_t worker_ready_count;
 static uint8_t worker_num = CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS;
 static TaskHandle_t worker_handles[CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS];
 #define OLDDD 1
-#if defined(OLDDD)
-#if ESP_IDF_VERSION_MAJOR < 5 || (ESP_IDF_VERSION_MAJOR == 5 && (ESP_IDF_VERSION_MINOR < 2 || (ESP_IDF_VERSION_MINOR == 2 && (!defined(ESP_IDF_VERSION_PATCH) || ESP_IDF_VERSION_PATCH < 1))))
+#if (OLDDD > 0)
+#if (ESP_IDF_VERSION_MAJOR < 5 || (ESP_IDF_VERSION_MAJOR == 5 && (ESP_IDF_VERSION_MINOR < 2 )))
 
 #define HTTPD_SCRATCH_BUF MAX(HTTPD_MAX_REQ_HDR_LEN, HTTPD_MAX_URI_LEN)
 #define PARSER_BLOCK_SIZE 128
