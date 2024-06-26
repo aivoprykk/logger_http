@@ -90,68 +90,8 @@ static struct m_handler handlers[] = {
       .user_ctx = (void *)&rest_server_context_12}},
     {0}};
 
-/* Set HTTP response content type according to file extension */
-esp_err_t set_content_type_from_file(void *_req, const char *filepath,
-                                     size_t pathlen) {
-    assert(filepath);
-    httpd_req_t *req = _req;
-    const char *type = "text/plain";
-    if (CHECK_FILE_EXTENSION(filepath, pathlen, ".html", 5)) {
-        type = HTTPD_TYPE_TEXT;
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".js", 3)) {
-        type = "application/javascript";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".css", 4)) {
-        type = "text/css";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".png", 4)) {
-        type = "image/png";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".ico", 4)) {
-        type = "image/x-icon";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".svg", 4)) {
-        type = "text/xml";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".sbp", 4)) {
-        type = HTTPD_TYPE_OCTET;
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".ubx", 4)) {
-        type = HTTPD_TYPE_OCTET;
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".gpx", 4)) {
-        type = HTTPD_TYPE_OCTET;
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".gpy", 4)) {
-        type = HTTPD_TYPE_OCTET;
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".txt", 4)) {
-        type = "text/plain";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".json", 5)) {
-        type = HTTPD_TYPE_JSON;
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".eot", 4)) {
-        type = "font/eot";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".ttf", 4)) {
-        type = "font/ttf";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".woff", 5)) {
-        type = "font/woff";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".woff2", 6)) {
-        type = "font/woff2";
-    } else if (CHECK_FILE_EXTENSION(filepath, pathlen, ".jpg", 4)) {
-        type = "image/jpg";
-    }
-    ESP_LOGI(TAG, "[%s] done file: %s, type: %s", __FUNCTION__, filepath, type);
-    return httpd_resp_set_type(req, type);
-}
-
-/*
-From
-https://github.com/loboris/ESP32_spiffs_example/blob/master/main/testSpiffs.c
-*/
-
-// fnmatch defines
-#define FNM_NOMATCH 1         // Match failed.
-#define FNM_NOESCAPE 0x01     // Disable backslash escaping.
-#define FNM_PATHNAME 0x02     // Slash must be matched by slash.
-#define FNM_PERIOD 0x04       // Period must be matched by period.
-#define FNM_LEADING_DIR 0x08  // Ignore /<tail> after Imatch.
-#define FNM_CASEFOLD 0x10     // Case insensitive search.
-#define FNM_PREFIX_DIRS 0x20  // Directory prefixes of pattern match too.
-#define EOS '\0'
-
 //-----------------------------------------------------------------------
-static const char *rangematch(const char *pattern, char test, int flags) {
+const char *rangematch(const char *pattern, char test, int flags) {
     int negate, ok;
     char c, c2;
 
@@ -197,7 +137,7 @@ static const char *rangematch(const char *pattern, char test, int flags) {
 }
 
 //--------------------------------------------------------------------
-static int fnmatch(const char *pattern, const char *string, int flags) {
+int fnmatch(const char *pattern, const char *string, int flags) {
     const char *stringstart;
     char c, test;
 
@@ -289,130 +229,131 @@ static int fnmatch(const char *pattern, const char *string, int flags) {
     return 0;
 }
 
-char *get_directory_json(const char *path, const char *match, strbf_t *buf) {
-    DIR *dir = NULL;
-    struct dirent *ent;
-    char type;
-    char size[16];
-    char tpath[FILE_PATH_MAX];
-    char tbuffer[92];
-    struct stat sb;
-    struct tm *tm_info;
-    char *lpath = NULL;
-    int statok;
+// char *get_directory_json(const char *path, const char *match, strbf_t *buf) {
+//     DIR *dir = NULL;
+//     struct dirent *ent;
+//     char type;
+//     char size[16];
+//     char tpath[FILE_PATH_MAX];
+//     char tbuffer[92];
+//     struct stat sb;
+//     struct tm *tm_info;
+//     char *lpath = NULL;
+//     int statok;
 
-    printf("\nList of Directory [%s]\n", path);
-    printf("-----------------------------------\n");
-    // Open directory
-    dir = opendir(path);
-    if (!dir) {
-        printf("Error opening directory\n");
-        return 0;
-    }
+//     printf("\nList of Directory [%s]\n", path);
+//     printf("-----------------------------------\n");
+//     // Open directory
+//     dir = opendir(path);
+//     if (!dir) {
+//         printf("Error opening directory\n");
+//         return 0;
+//     }
 
-    // Read directory entries
-    uint64_t total = 0;
-    uint32_t nfiles = 0, nitems = 0;
-    strbf_t fbuf;
-    strbf_inits(&fbuf, tpath, FILE_PATH_MAX);
-    strbf_puts(&fbuf, path);
-    size_t len = fbuf.cur - fbuf.start;
+//     // Read directory entries
+//     uint64_t total = 0;
+//     uint32_t nfiles = 0, nitems = 0;
+//     strbf_t fbuf;
+//     strbf_inits(&fbuf, tpath, FILE_PATH_MAX);
+//     strbf_puts(&fbuf, path);
+//     size_t len = fbuf.cur - fbuf.start;
 
-    printf("T  Size      Date/Time         Name\n");
-    printf("-----------------------------------\n");
-    strbf_puts(buf, "[");
-    while ((ent = readdir(dir)) != NULL) {
-        strbf_shape(&fbuf, len);
-        strbf_put_path(&fbuf, ent->d_name);
-        tbuffer[0] = '\0';
-        if ((match == NULL) ||
-            (fnmatch(match, &(tpath[0]), (FNM_PERIOD)) == 0)) {
-            // Get file stat
-            statok = stat(&(tpath[0]), &sb);
-            strbf_puts(buf, nitems > 0 ? ",{" : "{");
-            if (statok == 0) {
-                tm_info = localtime(&sb.st_mtime);
-                strftime(tbuffer, 92, "%Y-%m-%d %R", tm_info);
+//     printf("T  Size      Date/Time         Name\n");
+//     printf("-----------------------------------\n");
+//     int i = 0;
+//     strbf_puts(buf, "[");
+//     while ((ent = readdir(dir)) != NULL) {
+//         strbf_shape(&fbuf, len);
+//         strbf_put_path(&fbuf, ent->d_name);
+//         tbuffer[0] = '\0';
+//         if ((match == NULL) ||
+//             (fnmatch(match, &(tpath[0]), (FNM_PERIOD)) == 0)) {
+//             // Get file stat
+//             statok = stat(&(tpath[0]), &sb);
+//             strbf_puts(buf, nitems > 0 ? ",{" : "{");
+//             if (statok == 0) {
+//                 tm_info = localtime(&sb.st_mtime);
+//                 strftime(tbuffer, 92, "%Y-%m-%d %R", tm_info);
 
-            } else {
-                sprintf(tbuffer, "                ");
-            }
+//             } else {
+//                 sprintf(tbuffer, "                ");
+//             }
 
-            if (ent->d_type == DT_REG) {
-                type = 'f';
-                nfiles++;
-                if (statok)
-                    strcpy(size, "       ?");
-                else {
-                    total += sb.st_size;
-                    if (sb.st_size < (1024 * 1024))
-                        sprintf(size, "%8d", (int)sb.st_size);
-                    else if ((sb.st_size / 1024) < (1024 * 1024))
-                        sprintf(size, "%6dKB", (int)(sb.st_size / 1024));
-                    else
-                        sprintf(size, "%6dMB",
-                                (int)(sb.st_size / (1024 * 1024)));
-                }
-            } else {
-                type = 'd';
-                strcpy(size, "       -");
-            }
-            ++nitems;
-            strbf_puts(buf, "\"name\":\"");
-            strbf_puts(buf, ent->d_name);
-            strbf_puts(buf, "\",\"date\":\"");
-            if (!statok)
-                strbf_puts(buf, tbuffer);
-            strbf_puts(buf, "\",\"size\":\"");
-            if (!statok && ent->d_type == DT_REG)
-                strbf_putul(buf, (int)sb.st_size);
-            strbf_puts(buf, "\",\"type\":\"");
-            strbf_putc(buf, type);
-            strbf_puts(buf, "\",\"mode\":\"");
-            if (strstr(ent->d_name, "config")) {
-                strbf_puts(buf, "r");
-            } else
-                strbf_puts(buf, "rw");
-            strbf_puts(buf, "\"}");
+//             if (ent->d_type == DT_REG) {
+//                 type = 'f';
+//                 nfiles++;
+//                 if (statok)
+//                     strcpy(size, "       ?");
+//                 else {
+//                     total += sb.st_size;
+//                     if (sb.st_size < (1024 * 1024))
+//                         sprintf(size, "%8d", (int)sb.st_size);
+//                     else if ((sb.st_size / 1024) < (1024 * 1024))
+//                         sprintf(size, "%6dKB", (int)(sb.st_size / 1024));
+//                     else
+//                         sprintf(size, "%6dMB",
+//                                 (int)(sb.st_size / (1024 * 1024)));
+//                 }
+//             } else {
+//                 type = 'd';
+//                 strcpy(size, "       -");
+//             }
+//             ++nitems;
+//             strbf_puts(buf, "\"name\":\"");
+//             strbf_puts(buf, ent->d_name);
+//             strbf_puts(buf, "\",\"date\":\"");
+//             if (!statok)
+//                 strbf_puts(buf, tbuffer);
+//             strbf_puts(buf, "\",\"size\":\"");
+//             if (!statok && ent->d_type == DT_REG)
+//                 strbf_putul(buf, (int)sb.st_size);
+//             strbf_puts(buf, "\",\"type\":\"");
+//             strbf_putc(buf, type);
+//             strbf_puts(buf, "\",\"mode\":\"");
+//             if (strstr(ent->d_name, "config")) {
+//                 strbf_puts(buf, "r");
+//             } else
+//                 strbf_puts(buf, "rw");
+//             strbf_puts(buf, "\"}");
 
-            printf("%c  %s  %s  %s\r\n", type, size, tbuffer, ent->d_name);
-        }
-    }
-    strbf_puts(buf, "]\n");
-    if (total) {
-        printf("-----------------------------------\n");
-        if (total < (1024 * 1024))
-            printf("   %8d", (int)total);
-        else if ((total / 1024) < (1024 * 1024))
-            printf("   %6dKB", (int)(total / 1024));
-        else
-            printf("   %6dMB", (int)(total / (1024 * 1024)));
-        printf(" in %" PRIu32 " file(s)\n", nfiles);
-    }
-    printf("-----------------------------------\n");
+//             printf("%c  %s  %s  %s\r\n", type, size, tbuffer, ent->d_name);
+//         }
+//     }
+//     strbf_puts(buf, "]\n");
+//     if (total) {
+//         printf("-----------------------------------\n");
+//         if (total < (1024 * 1024))
+//             printf("   %8d", (int)total);
+//         else if ((total / 1024) < (1024 * 1024))
+//             printf("   %6dKB", (int)(total / 1024));
+//         else
+//             printf("   %6dMB", (int)(total / (1024 * 1024)));
+//         printf(" in %" PRIu32 " file(s)\n", nfiles);
+//     }
+//     printf("-----------------------------------\n");
 
-    closedir(dir);
+//     closedir(dir);
 
-    free(lpath);
-    return strbf_get(buf);
-}
+//     free(lpath);
+//     return strbf_get(buf);
+// }
 
-esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
-    /* if (strcmp("/hello", req->uri) == 0) {
-      httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
-                          "/hello URI is not available");
-      // Return ESP_OK to keep underlying socket open
-      return ESP_OK;
-    } else if (strcmp("/echo", req->uri) == 0) {
-      httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "/echo URI is not
-    available");
-      // Return ESP_FAIL to close underlying socket
-      return ESP_FAIL;
-    } */
-    /* For any other URI send 404 and close socket */
-    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
-    return ESP_FAIL;
-}
+// esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
+//     /* if (strcmp("/hello", req->uri) == 0) {
+//       httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+//                           "/hello URI is not available");
+//       // Return ESP_OK to keep underlying socket open
+//       return ESP_OK;
+//     } else if (strcmp("/echo", req->uri) == 0) {
+//       httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "/echo URI is not
+//     available");
+//       // Return ESP_FAIL to close underlying socket
+//       return ESP_FAIL;
+//     } */
+//     /* For any other URI send 404 and close socket */
+//     httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+//     return ESP_FAIL;
+// }
 
 httpd_handle_t start_webserver(void) {
     httpd_handle_t server = NULL;
@@ -497,6 +438,7 @@ esp_err_t http_start_webserver() {
         server = start_webserver();
         initialise_mdns();
     }
+    task_memory_info("webServer");
     if(server) return ESP_OK;
     else return ESP_FAIL;
 }
@@ -556,12 +498,50 @@ void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, v
 //     esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_AP_STOP,&disconnect_handler);
 // }
 
+static void esp_http_server_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
+    if(base == ESP_HTTP_SERVER_EVENT) {
+        esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
+        switch(id) {
+            case HTTP_SERVER_EVENT_ERROR: // 0
+                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_ERROR", __FUNCTION__);
+                break;
+            case HTTP_SERVER_EVENT_START: // 1
+                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_START", __FUNCTION__);
+                break;
+            case HTTP_SERVER_EVENT_ON_CONNECTED: // 2
+                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_ON_CONNECTED", __FUNCTION__);
+                break;
+            case HTTP_SERVER_EVENT_ON_HEADER: // 3
+                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_ON_HEADER", __FUNCTION__);
+                break;
+            case HTTP_SERVER_EVENT_HEADERS_SENT: // 4
+                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_HEADERS_SENT", __FUNCTION__);
+                break;
+            // case HTTP_SERVER_EVENT_ON_DATA: // 5
+            //     ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_ON_DATA %d", __FUNCTION__, data ? data->data_len : 0);
+            //     break;
+            // case HTTP_SERVER_EVENT_SENT_DATA: // 6
+            //     ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_SENT_DATA %d", __FUNCTION__, data ? data->data_len : 0);
+            //     break;
+            // case HTTP_SERVER_EVENT_DISCONNECTED: // 7
+            //     ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_DISCONNECTED", __FUNCTION__);
+            //     break;
+            case HTTP_SERVER_EVENT_STOP: // 8
+                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_STOP", __FUNCTION__);
+                break;
+            default:
+                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                break;
+        }
+    }
+}
 esp_err_t http_rest_init(const char *basepath) {
     esp_err_t ret = ESP_OK;
     if (!basepath){
         ret = ESP_FAIL;
         goto done;
     }
+    ESP_ERROR_CHECK(esp_event_handler_register(ESP_HTTP_SERVER_EVENT, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL));
     strbf_t buf;
     strbf_inits(&buf, base_path, ESP_VFS_PATH_MAX);
     struct stat sb = {0};
