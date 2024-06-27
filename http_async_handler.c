@@ -557,8 +557,10 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
             }
         }
     }
-    if(mode==1) 
-        httpd_resp_send_chunk(req, mode==1 ? "]" : "\n", 1);
+    strbf_puts(&buf, mode==1 ? "]" : "\n");
+    if(buf.cur > buf.start) {
+        httpd_resp_send_chunk(req, buf.start, buf.cur - buf.start);
+    }
     closedir(dir);
     ESP_LOGI(TAG, "[%s] Total %lu files, %lu items, %llu bytes, %u bytes sent.", __FUNCTION__, nfiles, nitems, total, i);
 
