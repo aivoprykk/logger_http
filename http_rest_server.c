@@ -56,7 +56,7 @@ rest_server_context_t rest_server_context_6 = {.base_path = &(base_path[0]),
                                                 .request_no = 6};
 rest_server_context_t rest_server_context_12 = {.base_path = &(base_path[0]),
                                                 .request_no = 12};
-static struct m_handler handlers[] = {
+static const struct m_handler handlers[] = {
     {0},
     {1,
      {.uri = "/api/v1/*",
@@ -355,6 +355,12 @@ int fnmatch(const char *pattern, const char *string, int flags) {
 //     return ESP_FAIL;
 // }
 
+static const char * http_rest_server_errors[] = {
+    "Error starting server",
+    "Failed to stop http server",
+    "Failed to set up mDNS service",
+};
+
 httpd_handle_t start_webserver(void) {
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -366,7 +372,7 @@ httpd_handle_t start_webserver(void) {
     if (httpd_start(&server, &config) == ESP_OK) {
         // Set URI handlers
         ESP_LOGI(TAG, "Registering URI handlers");
-        struct m_handler *handler;
+        const struct m_handler *handler;
         for (int i = 1, j = sizeof(handlers) / sizeof(struct m_handler); i < j; ++i) {
             handler = &handlers[i];
             if (handler->fctl > 0) {
@@ -379,7 +385,7 @@ httpd_handle_t start_webserver(void) {
         goto done;
     }
 
-    ESP_LOGI(TAG, "Error starting server!");
+    ESP_LOGI(TAG, "%s", http_rest_server_errors[0]);
     done:
     return server;
 }
@@ -387,7 +393,7 @@ httpd_handle_t start_webserver(void) {
 #if !CONFIG_IDF_TARGET_LINUX
 unsigned int stop_webserver(httpd_handle_t server) {
     // Stop the httpd server
-    struct m_handler *handler;
+    const struct m_handler *handler;
     unsigned int ret = 0;
     for (int i = 1, j = sizeof(handlers) / sizeof(struct m_handler); i < j; ++i) {
         handler = &handlers[i];
@@ -421,7 +427,7 @@ static esp_err_t initialise_mdns(void) {
     ret = mdns_service_add("esp-logger", "_http", "_tcp", 80, serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0]));
     done:
     if(ret)
-        ESP_LOGE(TAG, "Failed to set up mDNS service: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "%s: %s", http_rest_server_errors[2], esp_err_to_name(ret));
     return ret;
 }
 
@@ -452,7 +458,7 @@ esp_err_t http_stop_webserver() {
         if(!ret) {
             server = NULL;
         } else {
-            ESP_LOGE(TAG, "Failed to stop http server");
+            ESP_LOGE(TAG, "%s", http_rest_server_errors[1]);
         }
         stop_async_req_workers();
     }
@@ -466,7 +472,7 @@ void disconnect_handler(void *arg, esp_event_base_t event_base, int32_t event_id
         if (stop_webserver(*server) == ESP_OK) {
             *server = NULL;
         } else {
-            ESP_LOGE(TAG, "Failed to stop http server");
+            ESP_LOGE(TAG, "%s", http_rest_server_errors[1]);
         }
         stop_async_req_workers();
     }
@@ -498,36 +504,48 @@ void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, v
 //     esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_AP_STOP,&disconnect_handler);
 // }
 
+static const char *http_server_events [] = {
+    "HTTP_SERVER_EVENT_ERROR",
+    "HTTP_SERVER_EVENT_START",
+    "HTTP_SERVER_EVENT_ON_CONNECTED",
+    "HTTP_SERVER_EVENT_ON_HEADER",
+    "HTTP_SERVER_EVENT_HEADERS_SENT",
+    "HTTP_SERVER_EVENT_ON_DATA",
+    "HTTP_SERVER_EVENT_SENT_DATA",
+    "HTTP_SERVER_EVENT_DISCONNECTED",
+    "HTTP_SERVER_EVENT_STOP"
+};
+
 static void esp_http_server_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
     if(base == ESP_HTTP_SERVER_EVENT) {
         esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
         switch(id) {
             case HTTP_SERVER_EVENT_ERROR: // 0
-                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_ERROR", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             case HTTP_SERVER_EVENT_START: // 1
-                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_START", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             case HTTP_SERVER_EVENT_ON_CONNECTED: // 2
-                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_ON_CONNECTED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             case HTTP_SERVER_EVENT_ON_HEADER: // 3
-                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_ON_HEADER", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             case HTTP_SERVER_EVENT_HEADERS_SENT: // 4
-                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_HEADERS_SENT", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             // case HTTP_SERVER_EVENT_ON_DATA: // 5
-            //     ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_ON_DATA %d", __FUNCTION__, data ? data->data_len : 0);
+            //     ESP_LOGI(TAG, "[%s]  %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
             //     break;
             // case HTTP_SERVER_EVENT_SENT_DATA: // 6
-            //     ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_SENT_DATA %d", __FUNCTION__, data ? data->data_len : 0);
+            //     ESP_LOGI(TAG, "[%s] %s %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
             //     break;
             // case HTTP_SERVER_EVENT_DISCONNECTED: // 7
-            //     ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_DISCONNECTED", __FUNCTION__);
+            //     ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
             //     break;
             case HTTP_SERVER_EVENT_STOP: // 8
-                ESP_LOGI(TAG, "[%s] HTTP_SERVER_EVENT_STOP", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             default:
                 // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
