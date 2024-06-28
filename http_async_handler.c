@@ -210,6 +210,36 @@ static esp_err_t submit_async_req(httpd_req_t *req, httpd_req_handler_t handler)
     return ESP_OK;
 }
 
+static const char *http_async_handler_status_strings[] = {
+    "OK",
+    "Error",
+    "Success",
+};
+
+static const char *http_async_handler_strings[] = {
+    "{\"status\":\"",
+    "\",\"msg\":\"",
+    ",\"data\":",
+    "}\n",
+};
+
+static void http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, int status, char * data, int data_size) {
+    httpd_resp_send_chunk(req, http_async_handler_strings[0], 11); // status
+    if(status==0)
+        httpd_resp_send_chunk(req, http_async_handler_status_strings[0], 2);
+    else {
+        httpd_resp_send_chunk(req, http_async_handler_status_strings[1], 5);
+    }
+    httpd_resp_send_chunk(req, http_async_handler_strings[1], 9); // msg
+    httpd_resp_send_chunk(req, msg, msg_size==0 ? -1 : msg_size);
+    httpd_resp_send_chunk(req, "\"", 1);
+    if(data) {
+        httpd_resp_send_chunk(req, http_async_handler_strings[2], 9); //data
+        httpd_resp_send_chunk(req, data, data_size == 0 ? -1 : data_size);
+    }
+    httpd_resp_send_chunk(req, http_async_handler_strings[3], 3); // end
+}
+
 /* Set HTTP response content type according to file extension */
 static esp_err_t set_content_type_from_file(void *_req, const char *filepath,
                                      size_t pathlen) {
@@ -303,7 +333,7 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
                 ESP_LOGE(TAG, "File sending failed!");
                 // httpd_resp_sendstr_chunk(req, NULL);
                 httpd_resp_set_status(req, HTTPD_500);
-                httpd_resp_send_chunk(req, "{\"status\":\"Error\",\"msg\":\"Failed to send file\"}\n", -1);
+                http_send_json_msg(req, "Failed to send file", 19, 1, 0, 0);
                 return ESP_FAIL;
             }
         }
@@ -387,7 +417,7 @@ static esp_err_t config_handler_json(httpd_req_t *req, strbf_t *sb, const char *
     }    
 err:
     httpd_resp_set_status(req, HTTPD_500);
-    httpd_resp_send_chunk(req, "{\"status\":\"Error\",\"msg\":\"fail\"}\n", 32);
+    http_send_json_msg(req, "fail", 4, 1, 0, 0);
     return ESP_FAIL;
 }
 
@@ -407,20 +437,36 @@ static esp_err_t system_bat_get_handler(httpd_req_t * req) {
 
 /* Simple handler for getting system handler */
 static esp_err_t system_info_get_handler(httpd_req_t *req) {
+    char buf[16] = {0};
+    size_t len = 0;
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    cJSON *root = cJSON_CreateObject();
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
-    cJSON_AddStringToObject(root, "version", IDF_VER);
-    cJSON_AddNumberToObject(root, "cores", chip_info.cores);
-    cJSON_AddStringToObject(root, "model", chip_info.model == 1 ? "esp32" : "esp32s2");
-    cJSON_AddNumberToObject(root, "revision", chip_info.revision);
-    cJSON_AddStringToObject(root, "fwversion", m_context.SW_version);
-    cJSON_AddStringToObject(root, "ipaddress", wifi_context.ip_address);
-    const char *sys_info = cJSON_Print(root);
-    httpd_resp_sendstr(req, sys_info);
-    free((void *)sys_info);
-    cJSON_Delete(root);
+    httpd_resp_send_chunk(req, "{\"version\":\"", 12);
+    httpd_resp_send_chunk(req, IDF_VER, strlen(IDF_VER));
+    httpd_resp_send_chunk(req, "\",\"cores\":", 10);
+    len = xltoa(chip_info.cores, buf);
+    httpd_resp_send_chunk(req, buf, len);
+    httpd_resp_send_chunk(req, ",\"model\":\"", 10);
+    httpd_resp_send_chunk(req, chip_info.model == 1 ? "esp32" : "esp32s2", chip_info.model == 1 ? 5 : 7);
+    httpd_resp_send_chunk(req, "\",\"revision\":", 13);
+    len = xltoa(chip_info.revision, buf);
+    httpd_resp_send_chunk(req, buf, len);
+    httpd_resp_send_chunk(req, ",\"fwversion\":\"", 14);
+    httpd_resp_send_chunk(req, m_context.SW_version, strlen(m_context.SW_version));
+    httpd_resp_send_chunk(req, "\",\"ipaddress\":\"", 15);
+    httpd_resp_send_chunk(req, wifi_context.ip_address, strlen(wifi_context.ip_address));
+    httpd_resp_send_chunk(req, "\",\"freeheap\":", 13);
+    len = xltoa(esp_get_free_heap_size(), buf);
+    httpd_resp_send_chunk(req, buf, len);
+    httpd_resp_send_chunk(req, ",\"minfreeheap\":", 15);
+    len = xltoa(esp_get_minimum_free_heap_size(), buf);
+    httpd_resp_send_chunk(req, buf, len);
+    httpd_resp_send_chunk(req, ",\"battery\":", 11);
+    len = f3_to_char(volt_read(), buf);
+    httpd_resp_send_chunk(req, buf, len);
+    httpd_resp_send_chunk(req, http_async_handler_strings[3], 2); // }\n
+    httpd_resp_send_chunk(req, 0, 0);
     return ESP_OK;
 }
 
@@ -443,7 +489,8 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     if (!dir) {
         httpd_resp_set_status(req, HTTPD_500);
         if(mode==1) {
-            httpd_resp_send_chunk(req, "[]", 1);
+            http_send_json_msg(req, "Error opening directory", 23, 1, 0, 0);
+            // httpd_resp_send_chunk(req, "[]", 1);
         }
         else{
             httpd_resp_send_chunk(req, "Error opening directory.\n", 24);
@@ -643,13 +690,14 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
     } else if (strstr(req->uri, "/api/v1/login") == req->uri) {
         httpd_resp_set_type(req, HTTPD_TYPE_JSON);
         httpd_resp_set_status(req, HTTPD_200);
-        httpd_resp_send_chunk(req, "{\"user\":\"admin\",\"logged\":\"no\"}\n", HTTPD_RESP_USE_STRLEN);
+        http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0, "{\"user\":\"admin\",\"logged\":\"no\"}\n", 31);
     } else if (strstr(req->uri, "/api/v1/fw/version") == req->uri) {
         httpd_resp_set_type(req, HTTPD_TYPE_JSON);
         httpd_resp_set_status(req, HTTPD_200);
-        httpd_resp_send_chunk(req, "{\"status\":\"OK\",\"version\":\"", HTTPD_RESP_USE_STRLEN);
-        httpd_resp_send_chunk(req, m_context.SW_version, HTTPD_RESP_USE_STRLEN);
-        httpd_resp_send_chunk(req, "\"}\n", HTTPD_RESP_USE_STRLEN);
+        strbf_puts(&buf,"{\"version\":\"");
+        strbf_puts(&buf, m_context.SW_version);
+        strbf_puts(&buf, "\"}");
+        http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0, buf.start, buf.cur-buf.start);
     } else if (strstr(req->uri, "/api/v1/system/info") == req->uri) {
         system_info_get_handler(req);
         goto finishing;
@@ -659,7 +707,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
         goto finishing;
     } else if (strstr(req->uri, "/api/v1/system/restart") == req->uri) {
         httpd_resp_set_status(req, HTTPD_200);
-        httpd_resp_send_chunk(req, "{\"status\":\"OK\",\"msg\":\"restart pending.\"}\n", HTTPD_RESP_USE_STRLEN);
+        http_send_json_msg(req, "restart pending.", 16, 0, 0, 0);
         m_context.request_restart = 1;
         goto finishing;
     } else if (strstr(req->uri, "/files") == req->uri) {
@@ -705,7 +753,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
         } else {
             httpd_resp_set_type(req, HTTPD_TYPE_JSON);
             httpd_resp_set_status(req, HTTPD_404);
-            httpd_resp_send_chunk(req, "{\"status\":\"Error\",\"msg\":\"File not found\"}\n", -1);
+            http_send_json_msg(req, "File not found", 14, 1, 0, 0);
         }
 
     } else {
@@ -794,7 +842,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             if (fd < 0) {
                 ESP_LOGE(TAG, "Failed to open : %s, error:'%s'", filepath, strerror(errno));
                 httpd_resp_set_status(req, HTTPD_404);
-                httpd_resp_send_chunk(req, "{\"status\":\"Error\",\"msg\":\"Failed to open\"}\n", -1);
+                http_send_json_msg(req, "Failed to open", 14, 1, 0, 0);
                 return ESP_FAIL;
             }
         }
@@ -817,19 +865,23 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             err = archive_file(req, fbuf.start, CONFIG_SD_MOUNT_POINT);
         else
             err = unlink(fbuf.start);
+
+
         if (err) {
             ESP_LOGE(TAG, "Failed to %s file : %s", p, filepath);
             httpd_resp_set_status(req, HTTPD_400);
-            strbf_puts(&buf, "{\"status\":\"Error\",\"msg\":\"Failed\",\"name\":\"");
         } else {
             httpd_resp_set_status(req, HTTPD_200);
-            strbf_puts(&buf, "{\"status\":\"OK\",\"name\":\"");
         }
+        strbf_puts(&buf, "{\"name\":\"");
         strbf_put(&buf, fbuf.start, fbuf.cur - fbuf.start);
         strbf_puts(&buf, "\",\"cmd\":\"");
         strbf_puts(&buf, p);
-        strbf_puts(&buf, "\"}\n");
-        httpd_resp_send_chunk(req, buf.start, buf.cur - buf.start);
+        strbf_puts(&buf, "\"}");
+        if(err)
+            http_send_json_msg(req, "Failed", 6, 1, buf.start, buf.cur - buf.start);
+        else
+            http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0, buf.start, buf.cur - buf.start);
     }
 finishing:
     httpd_resp_send_chunk(req, NULL, 0);
@@ -1081,11 +1133,13 @@ esp_err_t post_async_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
     if (strstr(req->uri, "/api/v1/files/upload") == req->uri) {
         tlen = 20;
-        httpd_resp_send_chunk(req, "{\"status\": \"OK\",\"msg\":\"uploaded.\"\n}", 43);
+        http_send_json_msg(req, "uploaded.", 9, 0, 0, 0);
+        // httpd_resp_send_chunk(req, "{\"status\": \"OK\",\"msg\":\"uploaded.\"\n}", 43);
         goto done;
     } else if (strstr(req->uri, "/api/v1/fw/update") == req->uri) {
         tlen = 17;
-        httpd_resp_send_chunk(req, "{\"status\": \"OK\",\"msg\":\"Firmware updated.\"\n}", 43);
+        http_send_json_msg(req, "Firmware updated.", 17, 0, 0, 0);
+        // httpd_resp_send_chunk(req, "{\"status\": \"OK\",\"msg\":\"Firmware updated.\"\n}", 43);
         goto done;
     } else if (strstr(req->uri, "/api/v1/config") == req->uri) {
         tlen = 14;
@@ -1104,9 +1158,7 @@ esp_err_t post_async_handler(httpd_req_t *req) {
         if (config_save_var(m_context.config, m_context.filename, m_context.filename_backup, data.start, 0, g_context_get_ubx_hw(&m_context)) > 0) {
             strbf_init(&respsb);
             config_get_json(m_context.config, &respsb, r, g_context_get_ubx_hw(&m_context));
-            httpd_resp_send_chunk(req, "{\"status\":\"OK\",\"msg\":\"Saved\",\"data\":", 36);
-            httpd_resp_send_chunk(req, respsb.start, respsb.cur - respsb.start);
-            httpd_resp_send_chunk(req, "}", 1);
+            http_send_json_msg(req, "Saved", 5, 0, respsb.start, respsb.cur - respsb.start);
             strbf_free(&respsb);
             goto done;
         } else {
@@ -1116,9 +1168,11 @@ esp_err_t post_async_handler(httpd_req_t *req) {
     if (err < 0) {
     toerr:
         ESP_LOGE(TAG, "[%s] Request failed.", __FUNCTION__);
-        httpd_resp_send_chunk(req, "{\"status\": \"Failed\",\"msg\":\"Could not finish.\"}", 46);
+        http_send_json_msg(req, "Could not finish.", 17, 1, 0, 0);
+        //httpd_resp_send_chunk(req, "{\"status\": \"Failed\",\"msg\":\"Could not finish.\"}", 46);
     } else
-        httpd_resp_send_chunk(req, "{\"status\": \"OK\",\"msg\":\"Post data successfully\n}", 47);
+        http_send_json_msg(req, "Post data successfully", 22, 0, 0, 0);
+        // httpd_resp_send_chunk(req, "{\"status\": \"OK\",\"msg\":\"Post data successfully\n}", 47);
 done:
     httpd_resp_send_chunk(req, NULL, 0);
     if (ota_result.status == ESP_OK && ota_result.callback)
