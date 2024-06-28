@@ -234,10 +234,10 @@ static void http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, 
     httpd_resp_send_chunk(req, msg, msg_size==0 ? -1 : msg_size);
     httpd_resp_send_chunk(req, "\"", 1);
     if(data) {
-        httpd_resp_send_chunk(req, http_async_handler_strings[2], 9); //data
+        httpd_resp_send_chunk(req, http_async_handler_strings[2], 8); //data
         httpd_resp_send_chunk(req, data, data_size == 0 ? -1 : data_size);
     }
-    httpd_resp_send_chunk(req, http_async_handler_strings[3], 3); // end
+    httpd_resp_send_chunk(req, http_async_handler_strings[3], 2); // end
 }
 
 /* Set HTTP response content type according to file extension */
