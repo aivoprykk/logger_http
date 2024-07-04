@@ -214,6 +214,7 @@ static const char *http_async_handler_status_strings[] = {
     "OK",
     "Error",
     "Success",
+    "Failed to send header",
 };
 
 static const char *http_async_handler_strings[] = {
@@ -221,6 +222,8 @@ static const char *http_async_handler_strings[] = {
     "\",\"msg\":\"",
     ",\"data\":",
     "}\n",
+    "Access-Control-Allow-Origin",
+    "Access-Control-Allow-Methods",
 };
 
 static void http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, int status, char * data, int data_size) {
@@ -318,7 +321,7 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
         xultoa(len, &(tmp[0]));
         esp_err_t err = httpd_resp_set_hdr(req, "Content-Length", tmp);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to send header.");
+            ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
         } else
             ESP_LOGI(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);
     }
@@ -646,24 +649,24 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
     char *data = 0;
     if (strstr(req->uri, "/api/v1/") == req->uri) {
         tlen = 8;
-        esp_err_t err = httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        esp_err_t err = httpd_resp_set_hdr(req, http_async_handler_strings[4], "*");
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to send header.");
+            ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
         }
         if (!strcmp(&(req->uri[tlen]), "files")) {
-            esp_err_t err = httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, DELETE, POST");
+            esp_err_t err = httpd_resp_set_hdr(req, http_async_handler_strings[5], "GET, DELETE, POST");
             if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to send header.");
+                ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
             }
         } else if (!strcmp(&(req->uri[tlen]), "config")) {
-            esp_err_t err = httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS, PATCH");
+            esp_err_t err = httpd_resp_set_hdr(req, http_async_handler_strings[5], "GET, POST, OPTIONS, PATCH");
             if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to send header.");
+                ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
             }
         }
         err = httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to send header.");
+            ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
         }
     }
     if (req->method == HTTP_HEAD || req->method == HTTP_OPTIONS) {
@@ -1124,7 +1127,7 @@ esp_err_t post_async_handler(httpd_req_t *req) {
 
     if (strstr(req->uri, "/api/v1/") == req->uri) {
         tlen = 8;
-        err = httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        err = httpd_resp_set_hdr(req, http_async_handler_strings[4], "*");
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to send header.");
         }
