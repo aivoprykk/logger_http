@@ -1,6 +1,6 @@
 
 set(REQ esp_http_server)
-set(PRIVREQ app_update mdns logger_wifi logger_common logger_str json logger_adc logger_vfs logger_config logger_context gps_log logger_ubx)
+set(PRIVREQ app_update mdns logger_wifi logger_common logger_str logger_adc logger_vfs logger_config logger_context gps_log logger_ubx)
 
 file(GLOB SOURCES *.c)
 SET(INCS include)

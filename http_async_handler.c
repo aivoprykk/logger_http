@@ -9,7 +9,6 @@
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_system.h>
-#include "cJSON.h"
 #include "esp_chip_info.h"
 
 #include "http_async_handler.h"
@@ -41,7 +40,7 @@ extern struct m_wifi_context wifi_context;
 static QueueHandle_t async_req_queue;
 
 // Track the number of free workers at any given time
-static SemaphoreHandle_t worker_ready_count;
+static SemaphoreHandle_t worker_ready_count = 0;
 
 // Each worker has its own thread
 static uint8_t worker_num = CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS;
@@ -425,16 +424,17 @@ err:
 }
 
 static esp_err_t system_bat_get_handler(httpd_req_t * req) {
-    cJSON *root = cJSON_CreateObject();
+    char buf[16] = {0};
+    size_t len = 0;
+    httpd_resp_send_chunk(req, "{\"battery\":\"", 12);
 #ifdef USE_CUSTOM_CALIBRATION_VAL
-    cJSON_AddNumberToObject(root, "battery", volt_read(m_context_rtc.RTC_calibration_bat));
+    len = f3_to_char(volt_read(m_context_rtc.RTC_calibration_bat), buf);
 #else
-    cJSON_AddNumberToObject(root, "battery", volt_read());
+    len = f3_to_char(volt_read(), buf);
 #endif
-    const char *sys_info = cJSON_Print(root);
-    httpd_resp_sendstr(req, sys_info);
-    free((void *)sys_info);
-    cJSON_Delete(root);
+    httpd_resp_send_chunk(req, buf, len);
+    httpd_resp_send_chunk(req, http_async_handler_strings[3], 2); // }\n
+    httpd_resp_send_chunk(req, 0, 0);
     return ESP_OK;
 }
 
@@ -613,7 +613,7 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     }
     closedir(dir);
     ESP_LOGI(TAG, "[%s] Total %lu files, %lu items, %llu bytes, %u bytes sent.", __FUNCTION__, nfiles, nitems, total, i);
-
+    task_memory_info("dir_handler");
     free(lpath);
     return ESP_OK;
 }
@@ -647,6 +647,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
     const char *p = 0;
     uint8_t del_flag = 0, archive_flag = 0;
     char *data = 0;
+    int err = 0;
     if (strstr(req->uri, "/api/v1/") == req->uri) {
         tlen = 8;
         esp_err_t err = httpd_resp_set_hdr(req, http_async_handler_strings[4], "*");
@@ -859,11 +860,12 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
         }
     }
     if (del_flag || archive_flag) {
+
     manage_file:
-        const char *p = del_flag ? "unlink" : "archive";
+        p = del_flag ? "unlink" : "archive";
         ESP_LOGI(TAG, "Going to %s file: %s, uri: %s", p, fbuf.start, req->uri);
         httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-        int err = 0;
+        
         if (archive_flag)
             err = archive_file(req, fbuf.start, CONFIG_SD_MOUNT_POINT);
         else

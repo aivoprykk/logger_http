@@ -1,8 +1,6 @@
 
 
 #include <esp_http_server.h>
-//#include <esp_tls.h>
-//#include <esp_tls_crypto.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
@@ -10,12 +8,10 @@
 #include "sys/time.h"
 #include <unistd.h>
 
-#include "cJSON.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
-//#include "esp_wifi.h"
 #include "mdns.h"
 
 #include "http_rest_server.h"
@@ -23,7 +19,6 @@
 #include "strbf.h"
 #include "uri_common.h"
 #include "context.h"
-//#include "logger_common.h"
 
 #define HTTP_QUERY_KEY_MAX_LEN (64)
 
