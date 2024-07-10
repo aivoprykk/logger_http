@@ -19,6 +19,7 @@
 #include "strbf.h"
 #include "uri_common.h"
 #include "context.h"
+#include "logger_http_private.h"
 
 #define HTTP_QUERY_KEY_MAX_LEN (64)
 
@@ -51,30 +52,32 @@ rest_server_context_t rest_server_context_6 = {.base_path = &(base_path[0]),
                                                 .request_no = 6};
 rest_server_context_t rest_server_context_12 = {.base_path = &(base_path[0]),
                                                 .request_no = 12};
+
+static const char url_base[] = "/api/v1/*";
 static const struct m_handler handlers[] = {
     {0},
     {1,
-     {.uri = "/api/v1/*",
+     {.uri = url_base,
       .method = HTTP_DELETE,
       .handler = rest_async_get_handler,
       .user_ctx = (void *)&rest_server_context_1}},
     {3,
-     {.uri = "/api/v1/*",
+     {.uri = url_base,
       .method = HTTP_POST,
       .handler = post_async_handler,
       .user_ctx = (void *)&rest_server_context_3}},
     {4,
-     {.uri = "/api/v1/*",
+     {.uri = url_base,
       .method = HTTP_PATCH,
       .handler = post_async_handler,
       .user_ctx = (void *)&rest_server_context_4}},
     {5,
-     {.uri = "/api/v1/*",
+     {.uri = url_base,
       .method = HTTP_OPTIONS,
       .handler = rest_async_get_handler,
       .user_ctx = (void *)&rest_server_context_5}},
     {6,
-     {.uri = "/api/v1/*",
+     {.uri = url_base,
       .method = HTTP_HEAD,
       .handler = rest_async_get_handler,
       .user_ctx = (void *)&rest_server_context_6}},
@@ -357,6 +360,7 @@ static const char * http_rest_server_errors[] = {
 };
 
 httpd_handle_t start_webserver(void) {
+    ILOG(TAG, "[%s]", __func__);
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
@@ -366,7 +370,7 @@ httpd_handle_t start_webserver(void) {
     // Start the httpd server
     if (httpd_start(&server, &config) == ESP_OK) {
         // Set URI handlers
-        ESP_LOGI(TAG, "Registering URI handlers");
+        DLOG(TAG, "[%s] Registering URI handlers", __func__);
         const struct m_handler *handler;
         for (int i = 1, j = sizeof(handlers) / sizeof(struct m_handler); i < j; ++i) {
             handler = &handlers[i];
@@ -380,13 +384,14 @@ httpd_handle_t start_webserver(void) {
         goto done;
     }
 
-    ESP_LOGI(TAG, "%s", http_rest_server_errors[0]);
+    WLOG(TAG, "[%s] %s", __func__, http_rest_server_errors[0]);
     done:
     return server;
 }
 
 #if !CONFIG_IDF_TARGET_LINUX
 unsigned int stop_webserver(httpd_handle_t server) {
+    ILOG(TAG, "[%s]", __func__);
     // Stop the httpd server
     const struct m_handler *handler;
     unsigned int ret = 0;
@@ -411,6 +416,7 @@ unsigned int stop_webserver(httpd_handle_t server) {
 #define MDNS_INSTANCE "esp logger web server"
 
 static esp_err_t initialise_mdns(void) {
+    ILOG(TAG, "[%s]", __func__);
     esp_err_t ret = mdns_init();
     if(ret) goto done;
     ret = mdns_hostname_set(CONFIG_MDNS_HOST_NAME);
@@ -433,6 +439,7 @@ static esp_err_t deinitialise_mdns(void) {
 }
 
 esp_err_t http_start_webserver() {
+    ILOG(TAG, "[%s]", __func__);
     //httpd_handle_t server = s;
     if (server == NULL) {
         start_async_req_workers();
@@ -445,6 +452,7 @@ esp_err_t http_start_webserver() {
 }
 
 esp_err_t http_stop_webserver() {
+    ILOG(TAG, "[%s]", __func__);
     //httpd_handle_t server = s;
     esp_err_t ret = ESP_OK;
     if (server) {
@@ -516,39 +524,40 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
         esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
         switch(id) {
             case HTTP_SERVER_EVENT_ERROR: // 0
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             case HTTP_SERVER_EVENT_START: // 1
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             case HTTP_SERVER_EVENT_ON_CONNECTED: // 2
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             case HTTP_SERVER_EVENT_ON_HEADER: // 3
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             case HTTP_SERVER_EVENT_HEADERS_SENT: // 4
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             // case HTTP_SERVER_EVENT_ON_DATA: // 5
-            //     ESP_LOGI(TAG, "[%s]  %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
+            //     ILOG(TAG, "[%s]  %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
             //     break;
             // case HTTP_SERVER_EVENT_SENT_DATA: // 6
-            //     ESP_LOGI(TAG, "[%s] %s %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
+            //     ILOG(TAG, "[%s] %s %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
             //     break;
             // case HTTP_SERVER_EVENT_DISCONNECTED: // 7
-            //     ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+            //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
             //     break;
             case HTTP_SERVER_EVENT_STOP: // 8
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
             default:
-                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
 }
 esp_err_t http_rest_init(const char *basepath) {
+    ILOG(TAG, "[%s]", __func__);
     esp_err_t ret = ESP_OK;
     if (!basepath){
         ret = ESP_FAIL;
