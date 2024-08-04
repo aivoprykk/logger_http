@@ -21,7 +21,7 @@
 #include "strbf.h"
 #include "vfs.h"
 #include "adc.h"
-#include "wifi.h"
+#include "logger_wifi.h"
 #include "ubx.h"
 #include "logger_http_private.h"
 
