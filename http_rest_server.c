@@ -19,12 +19,14 @@
 #include "strbf.h"
 #include "uri_common.h"
 #include "context.h"
+#include "logger_config.h"
+#include "logger_wifi.h"
 #include "logger_http_private.h"
 
 #define HTTP_QUERY_KEY_MAX_LEN (64)
 
 extern struct context_s m_context;
-
+extern struct m_wifi_context wifi_context;
 /* A simple example that demonstrates how to create GET and POST
  * handlers for the web server.
  */
@@ -414,18 +416,36 @@ unsigned int stop_webserver(httpd_handle_t server) {
 }
 
 #define MDNS_INSTANCE "esp logger web server"
+#include "esp_mac.h"
 
 static esp_err_t initialise_mdns(void) {
     ILOG(TAG, "[%s]", __func__);
     esp_err_t ret = mdns_init();
     if(ret) goto done;
-    ret = mdns_hostname_set(CONFIG_MDNS_HOST_NAME);
+    size_t len = 0;
+    if(m_context.config->hostname[0] != '\0') {
+        len = strlen(m_context.config->hostname);
+        memcpy(&wifi_context.hostname[0], m_context.config->hostname, MIN(len, sizeof(wifi_context.hostname)));
+    } else {
+        len = strlen(CONFIG_MDNS_HOST_NAME);
+        memcpy(&wifi_context.hostname[0], CONFIG_MDNS_HOST_NAME, MIN(len, sizeof(wifi_context.hostname)));
+    }
+#if defined(CONFIG_WEB_SERVER_APPEND_MAC_TO_HOSTNAME)
+    if(!strcmp(&wifi_context.hostname[0],"esp-logger") && len<sizeof(wifi_context.hostname)) {
+        wifi_context.hostname[len++] = '-';
+        uint8_t mac[6];
+        esp_read_mac(&mac[0], ESP_MAC_EFUSE_FACTORY);
+        char mac_str[8]={0};
+        mac_to_char(mac, &wifi_context.hostname[len], 4);
+    }
+#endif
+    ret = mdns_hostname_set(&wifi_context.hostname[0]);
     if(ret) goto done;
     ret = mdns_instance_name_set(MDNS_INSTANCE);
     if(ret) goto done;
 
     mdns_txt_item_t serviceTxtData[] = {{"board", "esp32"}, {"path", "/"}};
-    ret = mdns_service_add("esp-logger", "_http", "_tcp", 80, serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0]));
+    ret = mdns_service_add(&wifi_context.hostname[0], "_http", "_tcp", 80, serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0]));
     done:
     if(ret)
         ESP_LOGE(TAG, "%s: %s", http_rest_server_errors[2], esp_err_to_name(ret));
@@ -555,6 +575,43 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 break;
         }
     }
+    else if(base == WIFI_EVENT) {
+        switch(id) {
+            case WIFI_EVENT_AP_START:
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                http_start_webserver();
+                break;
+            case WIFI_EVENT_AP_STOP:
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                if (!wifi_context.s_sta_connection)
+                    http_stop_webserver();
+                break;
+            default:
+                break;
+        }
+    }
+    else if(base == IP_EVENT) {
+        switch(id) {
+            case IP_EVENT_STA_GOT_IP:
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                http_start_webserver();
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
+                https_ota_start();
+#endif
+                break;
+            case IP_EVENT_STA_LOST_IP:
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                if (!wifi_context.s_ap_connection) {
+                    http_stop_webserver();
+    #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
+                    https_ota_stop();
+    #endif
+                }
+                break;
+            default:
+                break;
+        }
+    }
 }
 esp_err_t http_rest_init(const char *basepath) {
     ILOG(TAG, "[%s]", __func__);
@@ -563,7 +620,7 @@ esp_err_t http_rest_init(const char *basepath) {
         ret = ESP_FAIL;
         goto done;
     }
-    ESP_ERROR_CHECK(esp_event_handler_register(ESP_HTTP_SERVER_EVENT, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL));
     strbf_t buf;
     strbf_inits(&buf, base_path, ESP_VFS_PATH_MAX);
     struct stat sb = {0};

@@ -226,7 +226,7 @@ static const char *http_async_handler_strings[] = {
     "Access-Control-Allow-Methods",
 };
 
-static void http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, int status, char * data, int data_size) {
+static esp_err_t http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, int status, char * data, int data_size) {
     DLOG(TAG, "[%s] %s", __func__, msg);
     httpd_resp_send_chunk(req, http_async_handler_strings[0], 11); // status
     if(status==0)
@@ -242,6 +242,7 @@ static void http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, 
         httpd_resp_send_chunk(req, data, data_size == 0 ? -1 : data_size);
     }
     httpd_resp_send_chunk(req, http_async_handler_strings[3], 2); // end
+    return status;
 }
 
 /* Set HTTP response content type according to file extension */
@@ -343,6 +344,7 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
                 return ESP_FAIL;
             }
         }
+        task_memory_info("file_send_handler");
         i -= read_bytes;
     } while (read_bytes > 0);
     // send complete
@@ -444,6 +446,10 @@ static esp_err_t system_bat_get_handler(httpd_req_t * req) {
     return ESP_OK;
 }
 
+static int uint8_array_to_ipv4_string(uint8_t *ipv4, char *buf) {
+    return sprintf(buf, "%hhu.%hhu.%hhu.%hhu", ipv4[0], ipv4[1], ipv4[2], ipv4[3]);
+}
+
 /* Simple handler for getting system handler */
 static esp_err_t system_info_get_handler(httpd_req_t *req) {
     ILOG(TAG, "[%s]", __func__);
@@ -464,8 +470,22 @@ static esp_err_t system_info_get_handler(httpd_req_t *req) {
     httpd_resp_send_chunk(req, buf, len);
     httpd_resp_send_chunk(req, ",\"fwversion\":\"", 14);
     httpd_resp_send_chunk(req, m_context.SW_version, strlen(m_context.SW_version));
-    httpd_resp_send_chunk(req, "\",\"ipaddress\":\"", 15);
-    httpd_resp_send_chunk(req, wifi_context.ip_address, strlen(wifi_context.ip_address));
+    if(wifi_context.s_ap_connection) {
+        httpd_resp_send_chunk(req, "\",\"ap_ssid\":\"", 13);
+        httpd_resp_send_chunk(req, wifi_context.ap.ssid, strlen(wifi_context.ap.ssid));
+        httpd_resp_send_chunk(req, "\",\"ap_address\":\"", 16);
+        len = uint8_array_to_ipv4_string(wifi_context.ap.ipv4_address, &buf[0]);
+        httpd_resp_send_chunk(req, buf, len);
+    }
+    if(wifi_context.s_sta_connection) {
+        httpd_resp_send_chunk(req, "\",\"sta_ssid\":\"", 14);
+        httpd_resp_send_chunk(req, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, strlen(wifi_context.stas[wifi_context.s_sta_num_connect].ssid));
+        httpd_resp_send_chunk(req, "\",\"sta_address\":\"", 17);
+        len = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &buf[0]);
+        httpd_resp_send_chunk(req, buf, len);
+    }
+    httpd_resp_send_chunk(req, "\",\"hostname\":\"", 14);
+    httpd_resp_send_chunk(req, wifi_context.hostname, strlen(wifi_context.hostname));
     httpd_resp_send_chunk(req, "\",\"freeheap\":", 13);
     len = xltoa(esp_get_free_heap_size(), buf);
     httpd_resp_send_chunk(req, buf, len);
@@ -481,7 +501,7 @@ static esp_err_t system_info_get_handler(httpd_req_t *req) {
 }
 
 static esp_err_t directory_handler(httpd_req_t *req, const char *path, const char *match, uint8_t mode) {
-    ILOG(TAG, "[%s]", __func__);
+    ILOG(TAG, "[%s] %s", __func__, req->uri);
     DIR *dir = NULL;
     struct dirent *ent;
     char type;
@@ -628,7 +648,7 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
 
 /* Send HTTP response with the contents of the requested file */
 esp_err_t rest_async_get_handler(httpd_req_t *req) {
-    ILOG(TAG, "[%s]", __func__);
+    ILOG(TAG, "[%s] %s", __func__, req->uri);
     /* if (is_on_async_worker_thread() == false) {
         // submit
         if (submit_async_req(req, rest_async_get_handler) == ESP_OK) {
@@ -803,13 +823,13 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             fd = open(fbuf.start, O_RDONLY, 0);
             if (fd) {
                 char hostname[24] = {0};
-                char tmp[8] = {0}, *be = 0;
-                size_t bl = 0, hl = strlen(wifi_context.ip_address);
-                memcpy(&(hostname[0]), "http://", 7);
-                memcpy(&(hostname[7]), wifi_context.ip_address, hl);
-                hostname[7 + hl] = '/';
-                hostname[7 + hl + 1] = 0;
-                hl = &(hostname[7 + hl + 1]) - &(hostname[0]);
+                char tmp[8] = {0}, *be = hostname;
+                size_t bl = 0, hl = strlen(wifi_context.hostname);
+                memcpy(be, "http://", 7), be+=7;
+                memcpy(be, wifi_context.hostname, hl), be+=hl;
+                memcpy(be, ".local", 6), be+=6;
+                *be++ = '/', *be = 0;
+                hl = be - &(hostname[0]);
 
                 data = malloc(sb.st_size + hl);
                 int read_bytes = read(fd, data, sb.st_size);
@@ -929,9 +949,58 @@ struct mpart_s {
         --mpb;                                                        \
     }
 
+esp_err_t delete_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data) {
+    assert(data);
+    ILOG(TAG, "[%s] %s", __func__, data->start);
+    char * p = 0, *r = 0, *e = 0;
+    if(data->start && data->cur > data->start) {
+        strbf_t fbuf;
+        p = data->start;
+        strbf_inits(&fbuf, fname, flen);
+        strbf_puts(&fbuf, CONFIG_SD_MOUNT_POINT);
+        size_t len = fbuf.cur - fbuf.start;
+        if((p=strchr(p, '{'))) { // json
+            if((p=strstr(p, "\"name\":\""))) {
+                p+=8;
+                e = strchr(p, '"');
+            }
+            else {
+                return http_send_json_msg(req, "No data.", 8, 1, 0, 0);
+            }
+        }
+        else p = data->start;
+#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 2
+        printf("data: %s\n", p);
+#endif
+        while(p && (!e || p<e)) {
+            if(fbuf.cur-fbuf.start>len) strbf_shape(&fbuf, len);
+            r = strchr(p, '|');
+            if(!r) r = strchr(p, ',');
+            if((!r && e) || (r && e && r > e) ) r = e;
+            if(r) {
+                if(((fbuf.cur-fbuf.start) + (r-p) + 1) >= flen){
+                    return http_send_json_msg(req, "Filename too long.", 18, 2, 0, 0);
+                }
+                strbf_put_path_n(&fbuf, p, r-p);
+            } else {
+                strbf_put_path(&fbuf, p);
+            }
+            *fbuf.cur = 0;
+            printf("delete file: %s\n", fbuf.start);
+            if (unlink(fbuf.start)) {
+                return http_send_json_msg(req, "Failed", 6, 3, 0, 0);
+            }
+            p=r;
+            if(p && (*p=='|' || *p == ',')) ++p;
+        }
+    } else {
+        return http_send_json_msg(req, "No data.", 8, 1, 0, 0);
+    }
+    return http_send_json_msg(req, "deleted.", 8, 0, 0, 0);
+}
 /* A long running HTTP GET handler */
 esp_err_t post_async_handler(httpd_req_t *req) {
-    ILOG(TAG, "[%s]", __func__);
+    ILOG(TAG, "[%s] %s", __func__, req->uri);
     /* if (is_on_async_worker_thread() == false) {
         // submit
         if (submit_async_req(req, post_async_handler) == ESP_OK) {
@@ -950,7 +1019,7 @@ esp_err_t post_async_handler(httpd_req_t *req) {
     uint16_t buflen = 4096, fnamelen = 0, boundarylen = 0;
     char *buf = malloc(buflen);
     char *boundary = malloc(80);
-    char *fname = malloc(64);
+    char fname[64]={0};
     int fp = -1;
     bool mpart_open = false;
     uint8_t u_mode = strstr(req->uri, "/api/v1/fw/update") == req->uri ? 1 : 0;
@@ -969,7 +1038,9 @@ esp_err_t post_async_handler(httpd_req_t *req) {
             boundarylen = MIN(80, mpb0 - mpb);
             memcpy(boundary, mpb, boundarylen);
             boundary[boundarylen] = 0;
+#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 2
             printf("boundary found '%s' size '%" PRIu16 "'\n", boundary, boundarylen);
+#endif
         }
     }
 
@@ -989,16 +1060,19 @@ esp_err_t post_async_handler(httpd_req_t *req) {
                 goto toerr;
             }
         }
-        uint16_t l = 0;
+        uint32_t l = 0, now = 0;
+        uint8_t retry_times = 0;
         while (total_len > 0) {
             // Read the data for the request
+            now = get_millis();
             if ((recieved = httpd_req_recv(req, buf, MIN(total_len, buflen))) <= 0) {
                 if (recieved == HTTPD_SOCK_ERR_TIMEOUT) {
                     // Retry receiving if timeout occurred
-                    continue;
+                    ESP_LOGW(TAG, "Socket timeout after %lu ms, retrying ...", get_millis() - now);
+                    if(retry_times++ < 3) continue;
                 }
-                ESP_LOGE(TAG, "http recieve data error (%d)", recieved);
-                return ESP_FAIL;
+                ESP_LOGE(TAG, "http recieve data timeout, hanged at byte %lu", l);
+                goto toerr; 
             }
 
             if (is_multipart) {
@@ -1085,10 +1159,20 @@ esp_err_t post_async_handler(httpd_req_t *req) {
                         goto toerr;
                     }
                 } else if (u_mode == 0 && fnamelen) {
-                    if (!fname)  // no file name, no upload
+                    if (!fname[0])  // no file name, no upload
                         goto toerr;
                     else if (fp < 0) {
-                        fp = s_open(fname, CONFIG_SD_MOUNT_POINT, "w+");
+                        char path[16] = {0}, *p=0;
+                        strbf_t pbuf;
+                        strbf_inits(&pbuf, path, 16);
+                        strbf_put_path(&pbuf, CONFIG_SD_MOUNT_POINT);
+                        if((p=strstr(req->uri, "/files/"))) {
+                            strbf_put_path(&pbuf, p+7);
+                        }
+#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 2
+                        printf("[%s] open path: %s name: %s\n", __FUNCTION__, pbuf.start, fname);
+#endif
+                        fp = s_open(fname, pbuf.start, "w+");
                         if (fp < 0) {
                             fp = s_open(fname, CONFIG_SD_MOUNT_POINT, "w+");
                         }
@@ -1104,12 +1188,20 @@ esp_err_t post_async_handler(httpd_req_t *req) {
                 }
             } else {
                 DLOG(TAG, "[%s] got buffered data '%s' ", __FUNCTION__, buf);
+                if(l+recieved >= buflen) {
+                    ESP_LOGE(TAG, "Buffer overflow.");
+                    goto toerr;
+                }
                 strbf_put(&data, buf, recieved);
+                
             }
+            l += recieved;
+#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 1
+            printf("[%s] recieved: %d, total: %d, l: %lu\n", __FUNCTION__, recieved, total_len, l);
+#endif
             total_len -= recieved;
             memcpy(prev, buf + recieved - 11, 11);
             prev[11] = 0;
-            ++l;
         }
         if (is_multipart) {
             if (u_mode == 1) {
@@ -1125,13 +1217,13 @@ esp_err_t post_async_handler(httpd_req_t *req) {
                     goto toerr;
             }
         }
-        ESP_LOGI(TAG, "Post request saved.");
+        ESP_LOGI(TAG, "Post request saved %lu bytes.", l);
     }
     if (!is_multipart) {
         if (!data.start || data.cur == data.start) {
             goto toerr;
         }
-        ESP_LOGI(TAG, "got post request : %s", data.start);
+        ESP_LOGI(TAG, "got post request : '%s'", data.start);
     }
 
     /* rest_server_context_t *rest_context = (rest_server_context_t *)req->user_ctx;
@@ -1146,8 +1238,13 @@ esp_err_t post_async_handler(httpd_req_t *req) {
     }
 
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    if (strstr(req->uri, "/api/v1/files/upload") == req->uri) {
-        tlen = 20;
+    if (strstr(req->uri, "/api/v1/files/delete") == req->uri) {
+        if(delete_files(req, fname, 64, &data) != 0) {
+            ESP_LOGE(TAG, "[%s] delete failed.", __FUNCTION__);
+        }
+        goto done;
+    }
+    else if (strstr(req->uri, "/api/v1/files/upload") == req->uri) {
         http_send_json_msg(req, "uploaded.", 9, 0, 0, 0);
         // httpd_resp_send_chunk(req, "{\"status\": \"OK\",\"msg\":\"uploaded.\"\n}", 43);
         goto done;
@@ -1196,7 +1293,6 @@ done:
     strbf_free(&data);
     free(buf);
     free(boundary);
-    free(fname);
 
     return err;
 }

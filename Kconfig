@@ -31,7 +31,9 @@ menu "Logger HTTP Module Configuration"
         help
             Specify the domain name used in the mDNS service.
             Note that webapp also take it as a part of URL where it will send GET/POST requests to.
-    
+    config WEB_SERVER_APPEND_MAC_TO_HOSTNAME
+        bool "Append MAC address to hostname"
+        default false
     menu "HTTP Server Configuration"
         config WEB_SERVER_TASK_STACK_SIZE
             int "Http server Task stack size in bytes"
