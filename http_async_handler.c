@@ -330,6 +330,7 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
             DLOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);
     }
     int32_t read_bytes, i = len;
+    task_memory_info("file_send_handler");
     do {
         read_bytes = read(fd, chunk, chunk_size);
         if (read_bytes == -1) {
@@ -344,9 +345,9 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
                 return ESP_FAIL;
             }
         }
-        task_memory_info("file_send_handler");
         i -= read_bytes;
     } while (read_bytes > 0);
+    task_memory_info("file_send_handler");
     // send complete
     // httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
@@ -389,28 +390,31 @@ static esp_err_t config_handler_json(httpd_req_t *req, strbf_t *sb, const char *
             goto err;
         }
 
-        const char *startPtr = config_item_names;
-        const char *endPtr;
-        int i = 0;
+        const char *start_ptr = config_item_names;
+        const char *end_ptr = 0;
+        int i = 0, token_length=0;
         // Use strtok to iterate over the comma-separated values
-        while ((endPtr = strchr(startPtr, ',')) != NULL) {
-            int tokenLength = endPtr - startPtr;
-            if (tokenLength > 0) {
-                char tempBuffer[tokenLength + 1];
-                memcpy(tempBuffer, startPtr, tokenLength);
-                tempBuffer[tokenLength] = '\0';
+        while ((end_ptr = strchr(start_ptr, '|')) != NULL||(end_ptr = strchr(start_ptr, ',')) != NULL) {
+            while(*start_ptr==' ') ++start_ptr;
+            token_length = end_ptr - start_ptr;
+            while(*(start_ptr+token_length-1)==' ') --token_length;
+            if (token_length > 0) {
+                char tempBuffer[token_length + 1];
+                memcpy(tempBuffer, start_ptr, token_length);
+                tempBuffer[token_length] = 0;
                 CONF_GET(tempBuffer, i);
                 if(sb->cur - sb->start >= flush_size) {
                     httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
                     strbf_shape(sb, 0);
                 }
             }
-            startPtr = endPtr + 1; 
+            start_ptr = end_ptr + 1; 
             ++i;
         }
         // Handle the last token (or the only one if no commas were found)
-        if (*startPtr) { // Check if there's anything left
-            CONF_GET(startPtr, i); // Directly use startPtr as it's already null-terminated
+        while(start_ptr && *start_ptr && *start_ptr==' ') ++start_ptr;
+        if (start_ptr && *start_ptr) { // Check if there's anything left
+            CONF_GET(start_ptr, i); // Directly use startPtr as it's already null-terminated
             if (sb->cur - sb->start >= flush_size) {
                 httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
                 strbf_shape(sb, 0);
