@@ -33,11 +33,11 @@ menu "Logger HTTP Module Configuration"
             Note that webapp also take it as a part of URL where it will send GET/POST requests to.
     config WEB_SERVER_APPEND_MAC_TO_HOSTNAME
         bool "Append MAC address to hostname"
-        default false
+        default y
     menu "HTTP Server Configuration"
         config WEB_SERVER_TASK_STACK_SIZE
             int "Http server Task stack size in bytes"
-            default 5120
+            default 4608
         config WEB_SERVER_ASYNC_WORKER_TASK_STACK_SIZE
             int "Async workers Task stack size in bytes"
             default 4096
@@ -46,7 +46,7 @@ menu "Logger HTTP Module Configuration"
             default 1
         config WEB_DEPLOY_SF
             bool "Whether to Deploy files to System Flash Partition or not"
-            default false
+            default n
         config WEB_APP_PATH
             string "Webapp path in VFS"
             default "/www"
@@ -56,13 +56,13 @@ menu "Logger HTTP Module Configuration"
     menu "OTA Configuration"
     config USE_OTA
         bool "Use OTA"
-        default true
+        default n
         help
             Use OTA
     config OTA_USE_AUTO_UPDATE
         bool "Use auto update firmware checks"
         depends on USE_OTA
-        default false
+        default n
         help
             Use auto update firmware checks
     config OTA_API_SERVER_URL
