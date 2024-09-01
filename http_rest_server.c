@@ -22,7 +22,9 @@
 #include "logger_config.h"
 #include "logger_wifi.h"
 #include "logger_http_private.h"
-
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
+#include "https_ota.h"
+#endif
 #define HTTP_QUERY_KEY_MAX_LEN (64)
 
 extern struct context_s m_context;
@@ -229,132 +231,6 @@ int fnmatch(const char *pattern, const char *string, int flags) {
     return 0;
 }
 
-// char *get_directory_json(const char *path, const char *match, strbf_t *buf) {
-//     DIR *dir = NULL;
-//     struct dirent *ent;
-//     char type;
-//     char size[16];
-//     char tpath[FILE_PATH_MAX];
-//     char tbuffer[92];
-//     struct stat sb;
-//     struct tm *tm_info;
-//     char *lpath = NULL;
-//     int statok;
-
-//     printf("\nList of Directory [%s]\n", path);
-//     printf("-----------------------------------\n");
-//     // Open directory
-//     dir = opendir(path);
-//     if (!dir) {
-//         printf("Error opening directory\n");
-//         return 0;
-//     }
-
-//     // Read directory entries
-//     uint64_t total = 0;
-//     uint32_t nfiles = 0, nitems = 0;
-//     strbf_t fbuf;
-//     strbf_inits(&fbuf, tpath, FILE_PATH_MAX);
-//     strbf_puts(&fbuf, path);
-//     size_t len = fbuf.cur - fbuf.start;
-
-//     printf("T  Size      Date/Time         Name\n");
-//     printf("-----------------------------------\n");
-//     int i = 0;
-//     strbf_puts(buf, "[");
-//     while ((ent = readdir(dir)) != NULL) {
-//         strbf_shape(&fbuf, len);
-//         strbf_put_path(&fbuf, ent->d_name);
-//         tbuffer[0] = '\0';
-//         if ((match == NULL) ||
-//             (fnmatch(match, &(tpath[0]), (FNM_PERIOD)) == 0)) {
-//             // Get file stat
-//             statok = stat(&(tpath[0]), &sb);
-//             strbf_puts(buf, nitems > 0 ? ",{" : "{");
-//             if (statok == 0) {
-//                 tm_info = localtime(&sb.st_mtime);
-//                 strftime(tbuffer, 92, "%Y-%m-%d %R", tm_info);
-
-//             } else {
-//                 sprintf(tbuffer, "                ");
-//             }
-
-//             if (ent->d_type == DT_REG) {
-//                 type = 'f';
-//                 nfiles++;
-//                 if (statok)
-//                     strcpy(size, "       ?");
-//                 else {
-//                     total += sb.st_size;
-//                     if (sb.st_size < (1024 * 1024))
-//                         sprintf(size, "%8d", (int)sb.st_size);
-//                     else if ((sb.st_size / 1024) < (1024 * 1024))
-//                         sprintf(size, "%6dKB", (int)(sb.st_size / 1024));
-//                     else
-//                         sprintf(size, "%6dMB",
-//                                 (int)(sb.st_size / (1024 * 1024)));
-//                 }
-//             } else {
-//                 type = 'd';
-//                 strcpy(size, "       -");
-//             }
-//             ++nitems;
-//             strbf_puts(buf, "\"name\":\"");
-//             strbf_puts(buf, ent->d_name);
-//             strbf_puts(buf, "\",\"date\":\"");
-//             if (!statok)
-//                 strbf_puts(buf, tbuffer);
-//             strbf_puts(buf, "\",\"size\":\"");
-//             if (!statok && ent->d_type == DT_REG)
-//                 strbf_putul(buf, (int)sb.st_size);
-//             strbf_puts(buf, "\",\"type\":\"");
-//             strbf_putc(buf, type);
-//             strbf_puts(buf, "\",\"mode\":\"");
-//             if (strstr(ent->d_name, "config")) {
-//                 strbf_puts(buf, "r");
-//             } else
-//                 strbf_puts(buf, "rw");
-//             strbf_puts(buf, "\"}");
-
-//             printf("%c  %s  %s  %s\r\n", type, size, tbuffer, ent->d_name);
-//         }
-//     }
-//     strbf_puts(buf, "]\n");
-//     if (total) {
-//         printf("-----------------------------------\n");
-//         if (total < (1024 * 1024))
-//             printf("   %8d", (int)total);
-//         else if ((total / 1024) < (1024 * 1024))
-//             printf("   %6dKB", (int)(total / 1024));
-//         else
-//             printf("   %6dMB", (int)(total / (1024 * 1024)));
-//         printf(" in %" PRIu32 " file(s)\n", nfiles);
-//     }
-//     printf("-----------------------------------\n");
-
-//     closedir(dir);
-
-//     free(lpath);
-//     return strbf_get(buf);
-// }
-
-// esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
-//     /* if (strcmp("/hello", req->uri) == 0) {
-//       httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
-//                           "/hello URI is not available");
-//       // Return ESP_OK to keep underlying socket open
-//       return ESP_OK;
-//     } else if (strcmp("/echo", req->uri) == 0) {
-//       httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "/echo URI is not
-//     available");
-//       // Return ESP_FAIL to close underlying socket
-//       return ESP_FAIL;
-//     } */
-//     /* For any other URI send 404 and close socket */
-//     httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
-//     return ESP_FAIL;
-// }
-
 static const char * http_rest_server_errors[] = {
     "Error starting server",
     "Failed to stop http server",
@@ -466,7 +342,9 @@ esp_err_t http_start_webserver() {
         server = start_webserver();
         initialise_mdns();
     }
-    task_memory_info("webServer");
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+                task_memory_info(__func__);
+#endif
     if(server) return ESP_OK;
     else return ESP_FAIL;
 }
@@ -511,23 +389,7 @@ void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, v
 }
 #endif  // !CONFIG_IDF_TARGET_LINUX
 
-// void http_rest_init() {
-//     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &connect_handler, &server);
-//     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, &disconnect_handler, &server);
-//     esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_START, &connect_handler, &server);
-//     esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STOP, &disconnect_handler, &server);
-//     /* Start the server for the first time */
-//     //server = start_webserver();
-// }
-
-// void http_rest_uninit() {
-//     esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, &connect_handler);
-//     esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_LOST_IP, &disconnect_handler);
-//     esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_AP_START,&connect_handler);
-//     esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_AP_STOP,&disconnect_handler);
-// }
-
-static const char *http_server_events [] = {
+const char * const http_server_events [] = {
     "HTTP_SERVER_EVENT_ERROR",
     "HTTP_SERVER_EVENT_START",
     "HTTP_SERVER_EVENT_ON_CONNECTED",
@@ -548,9 +410,15 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 break;
             case HTTP_SERVER_EVENT_START: // 1
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+                task_memory_info(__func__);
+#endif
                 break;
             case HTTP_SERVER_EVENT_ON_CONNECTED: // 2
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+                task_memory_info(__func__);
+#endif
                 break;
             case HTTP_SERVER_EVENT_ON_HEADER: // 3
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
@@ -564,9 +432,12 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
             // case HTTP_SERVER_EVENT_SENT_DATA: // 6
             //     ILOG(TAG, "[%s] %s %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
             //     break;
-            // case HTTP_SERVER_EVENT_DISCONNECTED: // 7
-            //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
-            //     break;
+            case HTTP_SERVER_EVENT_DISCONNECTED: // 7
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+                task_memory_info(__func__);
+#endif
+                break;
             case HTTP_SERVER_EVENT_STOP: // 8
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
                 break;
@@ -586,6 +457,16 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 if (!wifi_context.s_sta_connection)
                     http_stop_webserver();
                 break;
+            case WIFI_EVENT_STA_START:
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                break;
+            case WIFI_EVENT_STA_STOP:
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
+                if(m_context.config->fwupdate.update_enabled)
+                    https_ota_stop();
+#endif
+                break;
             default:
                 break;
         }
@@ -596,17 +477,18 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
                 http_start_webserver();
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
-                https_ota_start();
+                if(m_context.config->fwupdate.update_enabled)
+                    https_ota_start();
 #endif
                 break;
             case IP_EVENT_STA_LOST_IP:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
-                if (!wifi_context.s_ap_connection) {
+                if (!wifi_context.s_ap_connection)
                     http_stop_webserver();
     #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
+                if(m_context.config->fwupdate.update_enabled)
                     https_ota_stop();
     #endif
-                }
                 break;
             default:
                 break;

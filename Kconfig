@@ -11,10 +11,10 @@ menu "Logger HTTP Module Configuration"
     menu "HTTP Server Configuration"
         config WEB_SERVER_TASK_STACK_SIZE
             int "Http server Task stack size in bytes"
-            default 4608
+            default 4864
         config WEB_SERVER_ASYNC_WORKER_TASK_STACK_SIZE
             int "Async workers Task stack size in bytes"
-            default 4096
+            default 5120
         config WEB_SERVER_NUM_ASYNC_WORKERS
             int "Number of async request handler tasks"
             default 1
@@ -30,15 +30,21 @@ menu "Logger HTTP Module Configuration"
     menu "OTA Configuration"
     config USE_OTA
         bool "Use OTA"
-        default n
+        default y
         help
             Use OTA
     config OTA_USE_AUTO_UPDATE
         bool "Use auto update firmware checks"
         depends on USE_OTA
-        default n
+        default y
         help
             Use auto update firmware checks
+    config OTA_AUTO_UPDATE_TASK_STACK_SIZE
+            int "OTA Task stack size in bytes"
+            depends on OTA_USE_AUTO_UPDATE
+            default 3584
+            help
+                OTA task stack size in bytes
     config OTA_API_SERVER_URL
         string "OTA api server name"
         depends on OTA_USE_AUTO_UPDATE
@@ -48,7 +54,7 @@ menu "Logger HTTP Module Configuration"
     config OTA_CHECK_INTERVAL
         int "Interfal to check updates ms"
         depends on OTA_USE_AUTO_UPDATE
-        default 50000
+        default 60000
         help
             Inrterval to check updates
     config OTA_SKIP_COMMON_NAME_CHECK

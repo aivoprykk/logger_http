@@ -167,14 +167,17 @@ static uint8_t is_on_async_worker_thread(void) {
     TaskHandle_t handle = xTaskGetCurrentTaskHandle();
     for (int i = 0; i < worker_num; i++) {
         if (worker_handles[i] == handle) {
+            ILOG(TAG, "[%s] found on async worker thread num %d", __func__, i);
             return true;
         }
     }
+    ILOG(TAG, "[%s] Not on async worker thread", __func__);
     return false;
 }
 
 // Submit an HTTP req to the async worker queue
 static esp_err_t submit_async_req(httpd_req_t *req, httpd_req_handler_t handler) {
+    ILOG(TAG, "[%s]", __func__);
     // must create a copy of the request that we own
     httpd_req_t *copy = NULL;
     esp_err_t err = httpd_req_async_handler_begin(req, &copy);
@@ -314,54 +317,69 @@ static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char
     return ret;
 }
 
-static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
+static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len, char * chunk, size_t chunk_size) {
     ILOG(TAG, "[%s]", __func__);
     if (fd <= 0) {
         return ESP_FAIL;
     }
-    size_t chunk_size = SCRATCH_BUFSIZE;
-    char chunk[chunk_size], tmp[8] = {0};
+    if(!req)
+        return ESP_FAIL;
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+    task_memory_info(__func__);
+#endif
+    char tmp[8] = {0};
     if (len) {
         xultoa(len, &(tmp[0]));
         esp_err_t err = httpd_resp_set_hdr(req, "Content-Length", tmp);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
         } else
-            DLOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);
+            ILOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);
     }
     int32_t read_bytes, i = len;
-    task_memory_info("file_send_handler");
     do {
-        read_bytes = read(fd, chunk, chunk_size);
+        read_bytes = read(fd, chunk, chunk_size-1);
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 1)
+        printf("%ld ", read_bytes);
+#endif
         if (read_bytes == -1) {
             ESP_LOGE(TAG, "Failed to read file.");
+            httpd_resp_set_status(req, HTTPD_500);
+            // http_send_json_msg(req, "Failed to send file", 19, 1, 0, 0);
+            return ESP_FAIL;
         } else if (read_bytes > 0) {
             if (httpd_resp_send_chunk(req, chunk, read_bytes) != ESP_OK) {
                 // close(fd);
                 ESP_LOGE(TAG, "File sending failed!");
                 // httpd_resp_sendstr_chunk(req, NULL);
                 httpd_resp_set_status(req, HTTPD_500);
-                http_send_json_msg(req, "Failed to send file", 19, 1, 0, 0);
+                // http_send_json_msg(req, "Failed to send file", 19, 1, 0, 0);
                 return ESP_FAIL;
             }
         }
         i -= read_bytes;
     } while (read_bytes > 0);
-    task_memory_info("file_send_handler");
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 1)
+    printf("\n");
+#endif
     // send complete
     // httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
 }
 
-static esp_err_t config_handler_json(httpd_req_t *req, strbf_t *sb, const char *str) {
+static esp_err_t config_handler_json(httpd_req_t *req, strbf_t *sb, const char *str, char * buf, size_t blen) {
     ILOG(TAG, "[%s]", __func__);
     //ESP_LOGI(TAG, "[%s] %s, config: '%s' method(%d)", __FUNCTION__, req->uri, str ? str : "null", req->method);
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+    task_memory_info(__func__);
+#endif
     // config_get_json(m_context.config, sb, str, g_context_get_ubx_hw(&m_context));
-    logger_config_t *config = m_context.config;
-    uint8_t ublox_hw = g_context_get_ubx_hw(&m_context);
-    size_t blen = SCRATCH_BUFSIZE, flush_size = blen, len = 0;
-    char buf[blen], *p = 0;
+    const logger_config_t *config = m_context.config;
+    const uint8_t ublox_hw = g_context_get_ubx_hw(&m_context);
+    size_t flush_size = blen, len = 0;
+    char tmp_buf[24] = {0};
+    char *p = 0;
 #define CONF_GETC(a)                                    \
     p = config_get(config, a, buf, &len, blen, 1, ublox_hw); \
     if (len) {                                          \
@@ -399,13 +417,16 @@ static esp_err_t config_handler_json(httpd_req_t *req, strbf_t *sb, const char *
             token_length = end_ptr - start_ptr;
             while(*(start_ptr+token_length-1)==' ') --token_length;
             if (token_length > 0) {
-                char tempBuffer[token_length + 1];
-                memcpy(tempBuffer, start_ptr, token_length);
-                tempBuffer[token_length] = 0;
-                CONF_GET(tempBuffer, i);
-                if(sb->cur - sb->start >= flush_size) {
-                    httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
-                    strbf_shape(sb, 0);
+                if(token_length >= 24) {
+                    ESP_LOGE(TAG, "Token length too long: %d for %s", token_length, start_ptr);
+                } else {
+                    memcpy(tmp_buf, start_ptr, token_length);
+                    tmp_buf[token_length] = 0;
+                    CONF_GET(tmp_buf, i);
+                    if(sb->cur - sb->start >= flush_size) {
+                        httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
+                        strbf_shape(sb, 0);
+                    }
                 }
             }
             start_ptr = end_ptr + 1; 
@@ -459,6 +480,9 @@ static esp_err_t system_info_get_handler(httpd_req_t *req) {
     ILOG(TAG, "[%s]", __func__);
     char buf[16] = {0};
     size_t len = 0;
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+    task_memory_info(__func__);
+#endif
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
@@ -504,24 +528,27 @@ static esp_err_t system_info_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static esp_err_t directory_handler(httpd_req_t *req, const char *path, const char *match, uint8_t mode) {
+static esp_err_t directory_handler(httpd_req_t *req, const char *path, const char *match, uint8_t mode, char * buf, size_t blen) {
     ILOG(TAG, "[%s] %s", __func__, req->uri);
-    DIR *dir = NULL;
-    struct dirent *ent;
+    DIR *dirp = NULL;
+    const struct dirent *ent;
     char type;
-    char size[16];
+    char size[16] = {0};
     char tpath[FILE_PATH_MAX];
-    char tbuffer[92];
-    struct stat sb;
+    char tbuffer[92] ={0};
+    struct stat statbuf;
     struct tm *tm_info;
-    char *lpath = NULL;
+    // char *lpath = NULL;
     int statok;
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+    task_memory_info(__func__);
+#endif
 
     httpd_resp_set_type(req, mode==1 ? HTTPD_TYPE_JSON : HTTPD_TYPE_TEXT);
     
     // Open directory
-    dir = opendir(path);
-    if (!dir) {
+    dirp = opendir(path);
+    if (!dirp) {
         httpd_resp_set_status(req, HTTPD_500);
         if(mode==1) {
             http_send_json_msg(req, "Error opening directory", 23, 1, 0, 0);
@@ -537,39 +564,46 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     // Read directory entries
     uint64_t total = 0;
     uint32_t nfiles = 0, nitems = 0;
-    strbf_t buf, fbuf;
-    strbf_inits(&fbuf, tpath, FILE_PATH_MAX);
-    strbf_puts(&fbuf, path);
-    size_t len = fbuf.cur - fbuf.start;
-    strbf_init(&buf);
-    size_t flush_size = SCRATCH_BUFSIZE;
+    strbf_t databuf, pathbuf;
+    
+    // path buffer
+    strbf_inits(&pathbuf, tpath, FILE_PATH_MAX);
+    strbf_puts(&pathbuf, path);
+    size_t len = pathbuf.cur - pathbuf.start;
+
+    // data buffer
+    strbf_inits(&databuf, buf, blen);
+    size_t flush_size = SCRATCH_BUFSIZE-128;
 
     size_t i = 0;
-    if(mode==1) 
-        httpd_resp_send_chunk(req, "[", 1);
+    if(mode==1) {
+        httpd_resp_send_chunk(req, "{\"path\":\"", 9);
+        httpd_resp_send_chunk(req, path, len);
+        httpd_resp_send_chunk(req, "\",\"data\":[", 10);
+    }
     else {
         httpd_resp_send_chunk(req, "T  Size      Date/Time         Name\n-----------------------------------\n", 72);
     }
 
-    while ((ent = readdir(dir)) != NULL) {
-        strbf_shape(&fbuf, len);
-        strbf_put_path(&fbuf, ent->d_name);
+    while ((ent = readdir(dirp)) != NULL) {
+        strbf_shape(&pathbuf, len);
+        strbf_put_path(&pathbuf, ent->d_name);
         tbuffer[0] = '\0';
         if ((match == NULL) || (fnmatch(match, &(tpath[0]), (FNM_PERIOD)) == 0)) {
             // Get file stat
-            statok = stat(&(tpath[0]), &sb);
+            statok = stat(&(tpath[0]), &statbuf);
             if(mode==1){
                 if(!nitems)
-                    strbf_putc(&buf, '{');
+                    strbf_putc(&databuf, '{');
                 else
-                    strbf_puts(&buf, ",{");
+                    strbf_puts(&databuf, ",{");
             }
             if (statok == 0) {
-                tm_info = localtime(&sb.st_mtime);
+                tm_info = localtime(&statbuf.st_mtime);
                 strftime(tbuffer, 92, "%Y-%m-%d %R", tm_info);
             }
             else if(mode==0) { // text
-                strbf_puts(&buf, "                ");
+                strbf_puts(&databuf, "                ");
             }
 
             if (ent->d_type == DT_REG) {
@@ -582,13 +616,13 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
                         sprintf(size, "%8s", "?");
                 }
                 else {
-                    total += sb.st_size;
-                    if (sb.st_size < (1024 * 1024))
-                        sprintf(size, "%8d", (int)sb.st_size);
-                    else if ((sb.st_size / 1024) < (1024 * 1024))
-                        sprintf(size, "%6dKB", (int)(sb.st_size / 1024));
+                    total += statbuf.st_size;
+                    if (statbuf.st_size < (1024 * 1024))
+                        sprintf(size, "%8d", (int)statbuf.st_size);
+                    else if ((statbuf.st_size / 1024) < (1024 * 1024))
+                        sprintf(size, "%6dKB", (int)(statbuf.st_size / 1024));
                     else
-                        sprintf(size, "%6dMB", (int)(sb.st_size / (1024 * 1024)));
+                        sprintf(size, "%6dMB", (int)(statbuf.st_size / (1024 * 1024)));
                 }
             } else {
                 type = 'd';
@@ -599,63 +633,64 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
             }
             ++nitems;
             if(mode==1)
-                strbf_puts(&buf, "\"name\":\"");
-            strbf_puts(&buf, ent->d_name);
+                strbf_puts(&databuf, "\"name\":\"");
+            strbf_puts(&databuf, ent->d_name);
             if(mode==1)
-                strbf_puts(&buf, "\",\"date\":\"");
+                strbf_puts(&databuf, "\",\"date\":\"");
             else
-                strbf_puts(&buf, " ");
+                strbf_puts(&databuf, " ");
             if (!statok)
-                strbf_puts(&buf, tbuffer);
+                strbf_puts(&databuf, tbuffer);
             if(mode==1)
-                strbf_puts(&buf, "\",\"size\":\"");
+                strbf_puts(&databuf, "\",\"size\":\"");
             else
-                strbf_puts(&buf, " ");
+                strbf_puts(&databuf, " ");
             if (!statok && ent->d_type == DT_REG)
-                strbf_putul(&buf, (int)sb.st_size);
+                strbf_putul(&databuf, (int)statbuf.st_size);
             if(mode==1)
-                strbf_puts(&buf, "\",\"type\":\"");
+                strbf_puts(&databuf, "\",\"type\":\"");
             else
-                strbf_puts(&buf, " ");
-            strbf_putc(&buf, type);
+                strbf_puts(&databuf, " ");
+            strbf_putc(&databuf, type);
             if(mode==1)
-                strbf_puts(&buf, "\",\"mode\":\"");
+                strbf_puts(&databuf, "\",\"mode\":\"");
             else
-                strbf_puts(&buf, " ");
+                strbf_puts(&databuf, " ");
             if (strstr(ent->d_name, "config")) {
-                strbf_puts(&buf, "r");
+                strbf_puts(&databuf, "r");
             } else
-                strbf_puts(&buf, "rw");
+                strbf_puts(&databuf, "rw");
             if(mode==1)
-                strbf_puts(&buf, "\"}");
+                strbf_puts(&databuf, "\"}");
             else
-                strbf_puts(&buf, "\n");
-            *buf.cur=0;
-            i+=buf.cur - buf.start;
-            if(buf.cur - buf.start > flush_size) {
-                httpd_resp_send_chunk(req, buf.start, buf.cur - buf.start);
-                strbf_shape(&buf, 0);
+                strbf_puts(&databuf, "\n");
+            *databuf.cur=0;
+            i+=databuf.cur - databuf.start;
+            if(databuf.cur - databuf.start > flush_size) {
+                httpd_resp_send_chunk(req, databuf.start, databuf.cur - databuf.start);
+                strbf_shape(&databuf, 0);
                 DLOG(TAG, "[%s] Flush at %lu files, %lu items, %llu bytes, %u bytes sent.", __FUNCTION__, nfiles, nitems, total, i);
             }
         }
     }
-    strbf_puts(&buf, mode==1 ? "]" : "\n");
-    if(buf.cur > buf.start) {
-        httpd_resp_send_chunk(req, buf.start, buf.cur - buf.start);
+    strbf_puts(&databuf, mode==1 ? "]}" : "\n");
+    if(databuf.cur > databuf.start) {
+        httpd_resp_send_chunk(req, databuf.start, databuf.cur - databuf.start);
     }
-    closedir(dir);
+    closedir(dirp);
     DLOG(TAG, "[%s] Total %lu files, %lu items, %llu bytes, %u bytes sent.", __FUNCTION__, nfiles, nitems, total, i);
-    task_memory_info("dir_handler");
-    free(lpath);
+    // strbf_free(&databuf);
     return ESP_OK;
 }
 
 /* Send HTTP response with the contents of the requested file */
 esp_err_t rest_async_get_handler(httpd_req_t *req) {
     ILOG(TAG, "[%s] %s", __func__, req->uri);
-    /* if (is_on_async_worker_thread() == false) {
+#if (CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 1)
+    if (is_on_async_worker_thread() == false) {
         // submit
         if (submit_async_req(req, rest_async_get_handler) == ESP_OK) {
+            ILOG(TAG, "[%s] submitted", __func__);
             return ESP_OK;
         } else {
             httpd_resp_set_type(req, HTTPD_TYPE_JSON);
@@ -664,16 +699,18 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
                 req, "{\"error\":\"no workers available. server busy.\"}\n");
             return ESP_OK;
         }
-    } */
-    char filepath[FILE_PATH_MAX];
+    }
+#endif
+    char filepath[FILE_PATH_MAX] = {0};
+    char strbuf[SCRATCH_BUFSIZE] = {0};
     rest_server_context_t *rest_context = (rest_server_context_t *)req->user_ctx;
     assert(rest_context);
     // int resp = (int)rest_context->request_no;
     //  char *resp_str = 0;
     strbf_t buf;
     strbf_init(&buf);
-    strbf_t fbuf;
-    strbf_inits(&fbuf, filepath, FILE_PATH_MAX);
+    strbf_t pathbuf;
+    strbf_inits(&pathbuf, filepath, FILE_PATH_MAX);
     size_t ulen = strlen(req->uri), tlen = 0;
     struct stat sb = {0};
     int statok, fd = 0;
@@ -681,6 +718,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
     uint8_t del_flag = 0, archive_flag = 0;
     char *data = 0;
     int err = 0;
+    bool base_path_needed = 0;
     if (strstr(req->uri, "/api/v1/") == req->uri) {
         tlen = 8;
         esp_err_t err = httpd_resp_set_hdr(req, http_async_handler_strings[4], "*");
@@ -707,124 +745,139 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
         httpd_resp_set_status(req, HTTPD_200);
         goto finishing;
     }
-
-    if (strstr(req->uri, "/api/v1/config") == req->uri) {
-        tlen = 14;
-        p = req->uri + tlen;
-        const char *r = 0;
-        if (ulen > tlen && *p == '/') {
-            r = req->uri + ulen - 1;
-            while (r > p && r && *r != '/')
-                --r;
-            if (r && *r == '/')
-                ++r;
-            if (!r || r - req->uri == ulen) {
-                r = 0;
+    if(strstr(req->uri, "/api/v1/") == req->uri) {
+        const char *uri = req->uri + 8;
+        if (strstr(uri, "config") == uri) {
+            tlen = 14;
+            p = req->uri + tlen;
+            const char *r = 0;
+            if (ulen > tlen && *p == '/') {
+                r = req->uri + ulen - 1;
+                while (r > p && r && *r != '/')
+                    --r;
+                if (r && *r == '/')
+                    ++r;
+                if (!r || r - req->uri == ulen) {
+                    r = 0;
+                }
             }
+            httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+            config_handler_json(req, &buf, r, &strbuf[0], SCRATCH_BUFSIZE);
+        } else if (strstr(uri, "login") == uri) {
+            httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+            httpd_resp_set_status(req, HTTPD_200);
+            http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0, "{\"user\":\"admin\",\"logged\":\"no\"}\n", 31);
+        } else if (strstr(uri, "fw/version") == uri) {
+            httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+            httpd_resp_set_status(req, HTTPD_200);
+            strbf_puts(&buf,"{\"version\":\"");
+            strbf_puts(&buf, m_context.SW_version);
+            strbf_puts(&buf, "\"}");
+            http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0, buf.start, buf.cur-buf.start);
+        } else if (strstr(uri, "system/info") == uri) {
+            system_info_get_handler(req);
+            goto finishing;
+        } else if (strstr(uri, "system/bat") == uri) {
+            httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+            system_bat_get_handler(req);
+            goto finishing;
+        } else if (strstr(uri, "system/restart") == uri) {
+            httpd_resp_set_status(req, HTTPD_200);
+            http_send_json_msg(req, "restart pending.", 16, 0, 0, 0);
+            m_context.request_restart = 1;
+            goto finishing;
+        } else if (strstr(uri, "files") == uri) {
+            tlen = 13;
+        process_file:
+            p = req->uri + tlen;
+            if(base_path_needed) {
+                strbf_shape(&pathbuf, 0);
+                strbf_puts(&pathbuf, CONFIG_SD_MOUNT_POINT);
+            }
+            const char *r = p;
+            if (ulen > tlen && *p == '/') {
+                r = req->uri + ulen - 1;
+                while (r >= p && r && *r != '/')
+                    --r;
+                if (r > p && r && *r == '/') {
+                    if (!strcmp(r + 1, "delete"))
+                        del_flag = 1;
+                    else if (!strcmp(r + 1, "archive"))
+                        archive_flag = 1;
+                }
+            }
+            if (!del_flag && !archive_flag) {
+                strbf_put_path(&pathbuf, p);
+            } else if (r > p) {
+                strbf_put_path_n(&pathbuf, p, r - p);
+            }
+            DLOG(TAG, "[%s] base directory: filepath: %s p: %s r: %s", __FUNCTION__, filepath, p, r);
+            statok = stat(strbf_finish(&pathbuf), &sb);
+            if (statok == 0) {
+                if (S_ISDIR(sb.st_mode)) {
+                    if (tlen < 13)
+                        goto get_index;
+                    //httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+                    directory_handler(req, filepath, 0, 1, &strbuf[0], SCRATCH_BUFSIZE);
+                    
+                } else {
+                    if (del_flag || archive_flag)
+                        goto manage_file;
+                    else
+                        goto get_file;  // file
+                }
+            } else if(!base_path_needed) {
+                base_path_needed = 1;
+                goto process_file;
+            } else {
+                httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+                httpd_resp_set_status(req, HTTPD_404);
+                http_send_json_msg(req, "File not found", 14, 1, 0, 0);
+            }
+
         }
-        httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-        config_handler_json(req, &buf, r);
-    } else if (strstr(req->uri, "/api/v1/login") == req->uri) {
-        httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-        httpd_resp_set_status(req, HTTPD_200);
-        http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0, "{\"user\":\"admin\",\"logged\":\"no\"}\n", 31);
-    } else if (strstr(req->uri, "/api/v1/fw/version") == req->uri) {
-        httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-        httpd_resp_set_status(req, HTTPD_200);
-        strbf_puts(&buf,"{\"version\":\"");
-        strbf_puts(&buf, m_context.SW_version);
-        strbf_puts(&buf, "\"}");
-        http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0, buf.start, buf.cur-buf.start);
-    } else if (strstr(req->uri, "/api/v1/system/info") == req->uri) {
-        system_info_get_handler(req);
-        goto finishing;
-    } else if (strstr(req->uri, "/api/v1/system/bat") == req->uri) {
-        httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-        system_bat_get_handler(req);
-        goto finishing;
-    } else if (strstr(req->uri, "/api/v1/system/restart") == req->uri) {
-        httpd_resp_set_status(req, HTTPD_200);
-        http_send_json_msg(req, "restart pending.", 16, 0, 0, 0);
-        m_context.request_restart = 1;
-        goto finishing;
-    } else if (strstr(req->uri, "/files") == req->uri) {
+        else {
+            httpd_resp_set_status(req, HTTPD_404);
+            http_send_json_msg(req, "None", 4, 1, 0, 0);
+        }
+    }
+    else if (strstr(req->uri, "/files") == req->uri) {
         tlen = 6;
         goto process_file;
-    } else if (strstr(req->uri, "/api/v1/files") == req->uri) {
-        tlen = 13;
-    process_file:
-        p = req->uri + tlen;
-        strbf_puts(&fbuf, CONFIG_SD_MOUNT_POINT);
-        const char *r = p;
-        if (ulen > tlen && *p == '/') {
-            r = req->uri + ulen - 1;
-            while (r >= p && r && *r != '/')
-                --r;
-            if (r > p && r && *r == '/') {
-                if (!strcmp(r + 1, "delete"))
-                    del_flag = 1;
-                else if (!strcmp(r + 1, "archive"))
-                    archive_flag = 1;
-            }
-        }
-        if (!del_flag && !archive_flag) {
-            strbf_put_path(&fbuf, p);
-        } else if (r > p) {
-            strbf_put_path_n(&fbuf, p, r - p);
-        }
-        DLOG(TAG, "[%s] base directory: filepath: %s p: %s r: %s", __FUNCTION__, filepath, p, r);
-        statok = stat(strbf_finish(&fbuf), &sb);
-        if (statok == 0) {
-            if (S_ISDIR(sb.st_mode)) {
-                if (tlen < 13)
-                    goto get_index;
-                //httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-                directory_handler(req, filepath, 0, 1);
-                
-            } else {
-                if (del_flag || archive_flag)
-                    goto manage_file;
-                else
-                    goto get_file;  // file
-            }
-        } else {
-            httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-            httpd_resp_set_status(req, HTTPD_404);
-            http_send_json_msg(req, "File not found", 14, 1, 0, 0);
-        }
-
-    } else {
+    } 
+    else { // get file from base path
         DLOG(TAG, "Going to open file base: %s, uri: %s", rest_context->base_path, req->uri);
         if ((ulen == 1 && *req->uri == '/') || strstr(req->uri, "/index.html") == req->uri) {
             goto get_index;
         }
-        strbf_puts(&fbuf, rest_context->base_path);
-        strbf_put_path(&fbuf, req->uri);
-
-        DLOG(TAG, "1. oopen file : %s", strbf_finish(&fbuf));
-        statok = stat(fbuf.start, &sb);
+        strbf_puts(&pathbuf, rest_context->base_path);
+        strbf_put_path(&pathbuf, req->uri);
+        strbf_finish(&pathbuf);
+        DLOG(TAG, "1. oopen file : %s", pathbuf.start);
+        statok = stat(pathbuf.start, &sb);
     get_file:
         fd = open(&(filepath[0]), O_RDONLY, 0);
         if (fd < 0 && strcmp(rest_context->base_path, CONFIG_SD_MOUNT_POINT)) {
             if ((ulen == 1 && *req->uri == '/') || strstr(req->uri, "/index.html") == req->uri) {
                 goto get_index;
             }
-            strbf_shape(&fbuf, 0);
-            strbf_puts(&fbuf, CONFIG_SD_MOUNT_POINT);
-            strbf_put_path(&fbuf, req->uri);
-
-            DLOG(TAG, "2. oopen file : %s", strbf_finish(&fbuf));
-            statok = stat(fbuf.start, &sb);
-            fd = open(fbuf.start, O_RDONLY, 0);
+            strbf_shape(&pathbuf, 0);
+            strbf_puts(&pathbuf, CONFIG_SD_MOUNT_POINT);
+            strbf_put_path(&pathbuf, req->uri);
+            strbf_finish(&pathbuf);
+            DLOG(TAG, "2. oopen file : %s", pathbuf.start);
+            statok = stat(pathbuf.start, &sb);
+            fd = open(pathbuf.start, O_RDONLY, 0);
         }
         if (fd < 0) {
         get_index:
-            strbf_shape(&fbuf, 0);
-            strbf_puts(&fbuf, rest_context->base_path);
-            strbf_put_path(&fbuf, "/index.html");
-            DLOG(TAG, "send index.html : %s", strbf_finish(&fbuf));
-            statok = stat(fbuf.start, &sb);
-            fd = open(fbuf.start, O_RDONLY, 0);
+            strbf_shape(&pathbuf, 0);
+            strbf_puts(&pathbuf, rest_context->base_path);
+            strbf_put_path(&pathbuf, "/index.html");
+            strbf_finish(&pathbuf);
+            DLOG(TAG, "send index.html : %s", pathbuf.start);
+            statok = stat(pathbuf.start, &sb);
+            fd = open(pathbuf.start, O_RDONLY, 0);
             if (fd) {
                 char hostname[24] = {0};
                 char tmp[8] = {0}, *be = hostname;
@@ -884,9 +937,9 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             }
         }
         if (fd) {
-            set_content_type_from_file(req, fbuf.start, fbuf.cur - fbuf.start);
-            send_file(req, fd, !statok && S_ISREG(sb.st_mode) ? sb.st_size : 0);
-            if (close(fd)) {
+            set_content_type_from_file(req, pathbuf.start, pathbuf.cur - pathbuf.start);
+            err = send_file(req, fd, !statok && S_ISREG(sb.st_mode) ? sb.st_size : 0, strbuf, SCRATCH_BUFSIZE);
+            if (fd<0 || close(fd)) {
                 ESP_LOGE(TAG, "Failed to close (%s)", strerror(errno));
             }
             // ESP_LOGI(TAG, "File sending complete");
@@ -896,13 +949,13 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
 
     manage_file:
         p = del_flag ? "unlink" : "archive";
-        DLOG(TAG, "Going to %s file: %s, uri: %s", p, fbuf.start, req->uri);
+        DLOG(TAG, "Going to %s file: %s, uri: %s", p, pathbuf.start, req->uri);
         httpd_resp_set_type(req, HTTPD_TYPE_JSON);
         
         if (archive_flag)
-            err = archive_file(req, fbuf.start, CONFIG_SD_MOUNT_POINT);
+            err = archive_file(req, pathbuf.start, CONFIG_SD_MOUNT_POINT);
         else
-            err = unlink(fbuf.start);
+            err = unlink(pathbuf.start);
 
 
         if (err) {
@@ -912,7 +965,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             httpd_resp_set_status(req, HTTPD_200);
         }
         strbf_puts(&buf, "{\"name\":\"");
-        strbf_put(&buf, fbuf.start, fbuf.cur - fbuf.start);
+        strbf_put(&buf, pathbuf.start, pathbuf.cur - pathbuf.start);
         strbf_puts(&buf, "\",\"cmd\":\"");
         strbf_puts(&buf, p);
         strbf_puts(&buf, "\"}");
@@ -923,7 +976,10 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
     }
 finishing:
     httpd_resp_send_chunk(req, NULL, 0);
-    task_memory_info("asyncHandlerGet");
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+    task_memory_info(__func__);
+#endif
+   memory_info_large("asyncHandlerGet");
     if (data)
         free(data);
     strbf_free(&buf);
@@ -973,7 +1029,7 @@ esp_err_t delete_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data
             }
         }
         else p = data->start;
-#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 2
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 1)
         printf("data: %s\n", p);
 #endif
         while(p && (!e || p<e)) {
@@ -990,7 +1046,9 @@ esp_err_t delete_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data
                 strbf_put_path(&fbuf, p);
             }
             *fbuf.cur = 0;
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
             printf("delete file: %s\n", fbuf.start);
+#endif
             if (unlink(fbuf.start)) {
                 return http_send_json_msg(req, "Failed", 6, 3, 0, 0);
             }
@@ -1005,9 +1063,11 @@ esp_err_t delete_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data
 /* A long running HTTP GET handler */
 esp_err_t post_async_handler(httpd_req_t *req) {
     ILOG(TAG, "[%s] %s", __func__, req->uri);
-    /* if (is_on_async_worker_thread() == false) {
+#if (CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 1)
+    if (is_on_async_worker_thread() == false) {
         // submit
         if (submit_async_req(req, post_async_handler) == ESP_OK) {
+            ILOG(TAG, "[%s] submitted", __func__);
             return ESP_OK;
         } else {
             httpd_resp_set_type(req, HTTPD_TYPE_JSON);
@@ -1015,12 +1075,16 @@ esp_err_t post_async_handler(httpd_req_t *req) {
             httpd_resp_sendstr(req, "{\"error\":\"no workers available. server busy.\"}\n");
             return ESP_OK;
         }
-    } */
+    }
+#endif
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+    task_memory_info(__func__);
+#endif
     struct mpart_s parts[4];
     memset(parts, 0, sizeof(parts));
     const char *mpb = 0, *mpb0 = 0;  //, *mpb1 = 0;
     char prev[12] = {0};
-    uint16_t buflen = 4096, fnamelen = 0, boundarylen = 0;
+    uint16_t buflen = SCRATCH_BUFSIZE, fnamelen = 0, boundarylen = 0;
     char *buf = malloc(buflen);
     char *boundary = malloc(80);
     char fname[64]={0};
@@ -1271,7 +1335,7 @@ esp_err_t post_async_handler(httpd_req_t *req) {
             }
         }
         strbf_t respsb;
-        if (config_save_var(m_context.config, m_context.filename, m_context.filename_backup, data.start, 0, g_context_get_ubx_hw(&m_context)) > 0) {
+        if (config_save_var(m_context.config, data.start, 0, g_context_get_ubx_hw(&m_context)) > 0) {
             strbf_init(&respsb);
             config_get_json(m_context.config, &respsb, r, g_context_get_ubx_hw(&m_context));
             http_send_json_msg(req, "Saved", 5, 0, respsb.start, respsb.cur - respsb.start);
@@ -1293,7 +1357,9 @@ done:
     httpd_resp_send_chunk(req, NULL, 0);
     if (ota_result.status == ESP_OK && ota_result.callback)
         ota_result.callback();  // will request restart
-    task_memory_info("asyncHandlerPost");
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+    task_memory_info(__func__);
+#endif
     strbf_free(&data);
     free(buf);
     free(boundary);
@@ -1316,7 +1382,7 @@ static void async_req_worker_task(void *p) {
         httpd_async_req_t async_req;
         if (xQueueReceive(async_req_queue, &async_req, portMAX_DELAY)) {
             httpd_req_t *req = async_req.req;
-            DLOG(TAG, "invoking uri '%s'", req->uri);
+            ILOG(TAG, "invoking uri '%s'", req->uri);
 
             // call the handler
             async_req.handler(req);
@@ -1331,7 +1397,9 @@ static void async_req_worker_task(void *p) {
         //     loops = 0;
         // }
         // if(loops == 0) {
-            task_memory_info("asyncWorkerTask");
+    #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+            task_memory_info(__func__);
+    #endif
         // }
         delay_ms(50);
     }
@@ -1350,19 +1418,24 @@ void start_async_req_workers(void) {
     async_req_queue = xQueueCreate(3, sizeof(httpd_async_req_t));
     if (async_req_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create async_req_queue");
-        vSemaphoreDelete(worker_ready_count);
+        if(worker_ready_count) {
+            vSemaphoreDelete(worker_ready_count);
+            worker_ready_count = NULL;
+        }
         return;
     }
     // start worker tasks
     for (int i = 0; i < worker_num; i++) {
-        DLOG(TAG, "Starting asyncReqWorker %d", i);
-        task_memory_info("asyncWorkerStart");
+        ILOG(TAG, "Starting asyncReqWorker %d", i);
         bool success = xTaskCreate(async_req_worker_task, "async_req_worker",
                                    CONFIG_WEB_SERVER_ASYNC_WORKER_TASK_STACK_SIZE,  // stack size
                                    (void *)0,                     // argument
                                    ASYNC_WORKER_TASK_PRIORITY,    // priority
                                    &worker_handles[i]);
-        if (!success) {
+ #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+            task_memory_info(__func__);
+#endif
+            if (!success) {
             ESP_LOGE(TAG, "Failed to start asyncReqWorker");
             continue;
         }
@@ -1376,8 +1449,10 @@ void stop_async_req_workers(void) {
     }
     for (int i = 0; i < worker_num; i++) {
         vTaskDelete(worker_handles[i]);
+        worker_handles[i] = NULL;
     }
     if (async_req_queue != NULL) {
         vQueueDelete(async_req_queue);
+        async_req_queue = NULL;
     }
 }
