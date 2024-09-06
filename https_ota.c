@@ -312,11 +312,24 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
                 ret = 1;
                 goto done;
             }
-#ifdef CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
-            snprintf(ota_url, ota_url_size, "http://%s%s/%s-%s.%s", OTA_URI_BASE, local_response_buffer, "esp-gps-logger", local_response_buffer, "bin");
-#else
-            snprintf(ota_url, ota_url_size, "https://%s%s/%s-%s.%s", OTA_URI_BASE, local_response_buffer, "esp-gps-logger", local_response_buffer, "bin");
+            size_t ota_url_len = 0;
+            memcpy(ota_url, "http", 4), ota_url_len = 4;
+#ifndef CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
+            ota_url[ota_url_len++] = 's';
 #endif
+            memcpy(ota_url+ota_url_len, "://", 3), ota_url_len += 3;
+            memcpy(ota_url+ota_url_len, OTA_URI_BASE, sizeof(OTA_URI_BASE)-1), ota_url_len += sizeof(OTA_URI_BASE)-1;
+            memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;
+            memcpy(ota_url+ota_url_len, "/esp-gps-logger-", 16), ota_url_len += 16;
+            memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;     
+#if defined(CONFIG_DISPLAY_DRIVER_SSD1681)
+            memcpy(ota_url+ota_url_len, "-ssd1681", 8), ota_url_len += 8;
+#endif
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+            memcpy(ota_url+ota_url_len, "-st7789", 7), ota_url_len += 7;
+#endif
+            memcpy(ota_url+ota_url_len, ".bin", 4), ota_url_len += 4;
+            ota_url[ota_url_len] = 0;
             ILOG(TAG, "OTA URL: %s", ota_url);
         }
     } else {
