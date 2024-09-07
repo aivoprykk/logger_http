@@ -92,7 +92,7 @@ menu "Logger HTTP Module Configuration"
     endmenu
     choice
         bool "Default log verbosity"
-        default LOGGER_HTTP_LOG_LEVEL_WARN
+        default LOGGER_HTTP_LOG_LEVEL_ERROR
         help
             Specify how important log should be added.
         config LOGGER_HTTP_LOG_LEVEL_TRACE

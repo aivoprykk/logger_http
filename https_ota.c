@@ -275,7 +275,9 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
     version_url_len += (m_context.config->fwupdate.channel == FW_UPDATE_CHANNEL_DEV) ? 9 : 7;
     version_url[version_url_len] = 0;
     config.url = &version_url[0];
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 3)
     printf("URL: %s %u\n", config.url, version_url_len);
+#endif
     config.event_handler = _http_event_handler;
     config.user_data = local_response_buffer;        // Pass address of local buffer to get response
 
