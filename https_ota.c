@@ -142,16 +142,18 @@ static esp_err_t validate_image_header(esp_app_desc_t *new_app_info) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const esp_partition_t *running = esp_ota_get_running_partition();
     esp_app_desc_t running_app_info;
-    if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) {
-        ILOG(TAG, "[%s] Running firmware version: %s, new: %s", __func__, running_app_info.version, new_app_info->version);
-    }
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_get_partition_description(running, &running_app_info);
+    const char *new_version = *new_app_info->version ? new_app_info->version : "null";
+    const char *running_version = *running_app_info.version ? running_app_info.version : "null";
 
 #ifndef CONFIG_OTA_SKIP_VERSION_CHECK
     if (compare_app_version(new_app_info->version, running_app_info.version) <= 0) {
-        ESP_LOGW(TAG, "[%s] device app version is >= remote version. We will not continue the update.", __func__);
+        ESP_LOGW(TAG, "[%s] device version(%s) is sync with remote version(%s), will not continue.", __func__, running_version, new_version);
         return 1;
+    } else {
+        ESP_LOGI(TAG, "[%s] device version(%s) is < remote version(%s), continue.", __func__, running_version, new_version);
     }
 #endif
 
@@ -164,10 +166,8 @@ static esp_err_t validate_image_header(esp_app_desc_t *new_app_info) {
      */
     const uint32_t hw_sec_version = esp_efuse_read_secure_version();
     if (new_app_info->secure_version < hw_sec_version) {
-        ESP_LOGW(TAG,
-                 "[%s] New firmware security version is less than eFuse programmed, "
-                 "%" PRIu32 " < %" PRIu32, __func__,
-                 new_app_info->secure_version, hw_sec_version);
+        ESP_LOGW(TAG, "[%s] New firmware security version is less than eFuse programmed, "
+                 "%" PRIu32 " < %" PRIu32, __func__, new_app_info->secure_version, hw_sec_version);
         return ESP_FAIL;
     }
 #endif
@@ -321,6 +321,7 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
 #endif
             memcpy(ota_url+ota_url_len, "://", 3), ota_url_len += 3;
             memcpy(ota_url+ota_url_len, OTA_URI_BASE, sizeof(OTA_URI_BASE)-1), ota_url_len += sizeof(OTA_URI_BASE)-1;
+            assert((ota_url_len + (2*len) + 16 + 8 + 8) < ota_url_size);
             memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;
             memcpy(ota_url+ota_url_len, "/esp-gps-logger-", 16), ota_url_len += 16;
             memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;     
