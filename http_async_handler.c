@@ -507,9 +507,11 @@ static esp_err_t system_info_get_handler(httpd_req_t *req) {
     }
     if(wifi_context.s_sta_connection) {
         httpd_resp_send_chunk(req, "\",\"sta_ssid\":\"", 14);
-        httpd_resp_send_chunk(req, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, strlen(wifi_context.stas[wifi_context.s_sta_num_connect].ssid));
+        if(wifi_context.s_sta_got_ip)
+         httpd_resp_send_chunk(req, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, strlen(wifi_context.stas[wifi_context.s_sta_num_connect].ssid));
         httpd_resp_send_chunk(req, "\",\"sta_address\":\"", 17);
-        len = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &buf[0]);
+        if(wifi_context.s_sta_got_ip)
+            len = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &buf[0]);
         httpd_resp_send_chunk(req, buf, len);
     }
     httpd_resp_send_chunk(req, "\",\"hostname\":\"", 14);
