@@ -356,9 +356,6 @@ static esp_err_t _http_client_init_cb(esp_http_client_handle_t http_client) {
 
 static esp_err_t ota_get_task(void *pvParameter) {
     ILOG(TAG, "[%s]", __FUNCTION__);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
-                task_memory_info(__func__);
-#endif
     uint32_t wait_until = m_context.fw_update_postponed;
     esp_err_t err = ESP_OK;
     if(wait_until && get_millis() < wait_until) {
@@ -418,8 +415,8 @@ static esp_err_t ota_get_task(void *pvParameter) {
                 goto ota_finish;
             }
         }
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
-                task_memory_info(__func__);
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
+        task_memory_info(__func__);
 #endif
 
         while (1) {
@@ -487,7 +484,7 @@ void ota_task(void *pvParameter) {
             next_check = last_check + ((CONFIG_OTA_CHECK_INTERVAL)*1000llu);
         }
         delay_ms(10000);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
         task_memory_info(__func__);
 #endif
     }

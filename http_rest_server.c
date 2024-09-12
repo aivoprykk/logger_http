@@ -342,8 +342,8 @@ esp_err_t http_start_webserver() {
         server = start_webserver();
         initialise_mdns();
     }
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
-                task_memory_info(__func__);
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
+    task_memory_info(__func__);
 #endif
     if(server) return ESP_OK;
     else return ESP_FAIL;
@@ -410,13 +410,10 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 break;
             case HTTP_SERVER_EVENT_START: // 1
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
-                task_memory_info(__func__);
-#endif
                 break;
             case HTTP_SERVER_EVENT_ON_CONNECTED: // 2
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
                 task_memory_info(__func__);
 #endif
                 break;
@@ -434,9 +431,6 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
             //     break;
             case HTTP_SERVER_EVENT_DISCONNECTED: // 7
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
-                task_memory_info(__func__);
-#endif
                 break;
             case HTTP_SERVER_EVENT_STOP: // 8
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);

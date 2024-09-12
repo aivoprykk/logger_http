@@ -324,7 +324,7 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len, char * chunk,
     }
     if(!req)
         return ESP_FAIL;
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     char tmp[8] = {0};
@@ -371,7 +371,7 @@ static esp_err_t config_handler_json(httpd_req_t *req, strbf_t *sb, const char *
     ILOG(TAG, "[%s]", __func__);
     //ESP_LOGI(TAG, "[%s] %s, config: '%s' method(%d)", __FUNCTION__, req->uri, str ? str : "null", req->method);
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     // config_get_json(m_context.config, sb, str, g_context_get_ubx_hw(&m_context));
@@ -480,7 +480,7 @@ static esp_err_t system_info_get_handler(httpd_req_t *req) {
     ILOG(TAG, "[%s]", __func__);
     char buf[16] = {0};
     size_t len = 0;
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
@@ -540,7 +540,7 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     struct tm *tm_info;
     // char *lpath = NULL;
     int statok;
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
 
@@ -976,10 +976,10 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
     }
 finishing:
     httpd_resp_send_chunk(req, NULL, 0);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
+    memory_info_large("asyncHandlerGet");
 #endif
-   memory_info_large("asyncHandlerGet");
     if (data)
         free(data);
     strbf_free(&buf);
@@ -1076,9 +1076,6 @@ esp_err_t post_async_handler(httpd_req_t *req) {
             return ESP_OK;
         }
     }
-#endif
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
-    task_memory_info(__func__);
 #endif
     struct mpart_s parts[4];
     memset(parts, 0, sizeof(parts));
@@ -1357,7 +1354,7 @@ done:
     httpd_resp_send_chunk(req, NULL, 0);
     if (ota_result.status == ESP_OK && ota_result.callback)
         ota_result.callback();  // will request restart
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     strbf_free(&data);
@@ -1397,7 +1394,7 @@ static void async_req_worker_task(void *p) {
         //     loops = 0;
         // }
         // if(loops == 0) {
-    #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+    #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
             task_memory_info(__func__);
     #endif
         // }
@@ -1432,7 +1429,7 @@ void start_async_req_workers(void) {
                                    (void *)0,                     // argument
                                    ASYNC_WORKER_TASK_PRIORITY,    // priority
                                    &worker_handles[i]);
- #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+ #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
             task_memory_info(__func__);
 #endif
             if (!success) {

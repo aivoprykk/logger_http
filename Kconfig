@@ -11,7 +11,7 @@ menu "Logger HTTP Module Configuration"
     menu "HTTP Server Configuration"
         config WEB_SERVER_TASK_STACK_SIZE
             int "Http server Task stack size in bytes"
-            default 4864
+            default 5120
         config WEB_SERVER_ASYNC_WORKER_TASK_STACK_SIZE
             int "Async workers Task stack size in bytes"
             default 5120
