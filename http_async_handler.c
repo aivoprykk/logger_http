@@ -5,6 +5,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+#include "logger_http_private.h"
+
 #include <esp_event.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
@@ -23,7 +25,6 @@
 #include "adc.h"
 #include "logger_wifi.h"
 #include "ubx.h"
-#include "logger_http_private.h"
 
 #define ASYNC_WORKER_TASK_PRIORITY 5
 #define ASYNC_WORKER_TASK_STACK_SIZE 1024 * 3
@@ -333,8 +334,9 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len, char * chunk,
         esp_err_t err = httpd_resp_set_hdr(req, "Content-Length", tmp);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
-        } else
-            ILOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);
+        } else {
+            ILOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);    
+        }
     }
     int32_t read_bytes, i = len;
     do {

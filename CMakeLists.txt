@@ -15,7 +15,7 @@ set(ota_crt ${pdir}/certs/majasa_ca.pem)
 endif()
 endif()
 
-if(CONFIG_OTA_USE_AUTO_UPDATE AND CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP)
+if(CONFIG_OTA_USE_AUTO_UPDATE AND NOT CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP)
 idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS ${INCS}

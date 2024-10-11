@@ -9,6 +9,8 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
+#include "logger_http_private.h"
+
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -26,7 +28,6 @@
 #include "esp_https_ota.h"
 
 #include "logger_events.h"
-#include "logger_http_private.h"
 #include "logger_common.h"
 #include "context.h"
 #include "logger_config.h"
@@ -42,8 +43,10 @@ void https_ota_stop() {
 #else
 
 static SemaphoreHandle_t xMutex = 0;
+#ifndef CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
 extern const uint8_t server_cert_pem_start[] asm("_binary_majasa_ca_pem_start");
 extern const uint8_t server_cert_pem_end[] asm("_binary_majasa_ca_pem_end");
+#endif
 
 #define OTA_URL_SIZE 256
 
@@ -51,6 +54,11 @@ static const char *TAG = "https_ota";
 extern struct context_s m_context;
 
 #define OTA_URI_BASE CONFIG_OTA_API_SERVER_URL "/api/firmware/versions/"
+#if defined(PROJECT_NAME)
+static const char project_name[] = PROJECT_NAME;
+#else
+static const char project_name[] = "esp-gps-logger";
+#endif
 
 const char * const http_ota_events [] = {
     "ESP_HTTPS_OTA_START",                    /*!< OTA started */
@@ -147,7 +155,19 @@ static esp_err_t validate_image_header(esp_app_desc_t *new_app_info) {
     esp_ota_get_partition_description(running, &running_app_info);
     const char *new_version = *new_app_info->version ? new_app_info->version : "null";
     const char *running_version = *running_app_info.version ? running_app_info.version : "null";
-
+    const char dev_str[] = "dev";
+    size_t len = strlen(running_version), dlen = sizeof(dev_str) - 1;
+    if(m_context.config->fwupdate.channel == FW_UPDATE_CHANNEL_DEV) {
+        if(running_version && len >= dlen && strstr(running_version+len-dlen, dev_str) == 0) {
+            ESP_LOGW(TAG, "[%s] Device is in dev channel, but running version(%s) is prod, will reload.", __func__, running_version);
+            return 0;
+        }
+    } else {
+        if(running_version && len >= dlen && strstr(running_version+len-dlen, dev_str) >= running_version + len-dlen) {
+            ESP_LOGW(TAG, "[%s] Device is in prod channel, but running version(%s) is dev, will reload.", __func__, running_version);
+            return 0;
+        }
+    }
 #ifndef CONFIG_OTA_SKIP_VERSION_CHECK
     if (compare_app_version(new_app_info->version, running_app_info.version) <= 0) {
         ESP_LOGW(TAG, "[%s] device version(%s) is sync with remote version(%s), will not continue.", __func__, running_version, new_version);
@@ -192,9 +212,9 @@ static int output_len=0;       // Stores number of bytes read
 static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     int32_t id = evt->event_id;
     switch (id) {
-        // case HTTP_EVENT_ERROR:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
-        //     break;
+        case HTTP_EVENT_ERROR:
+             ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
+             break;
         // case HTTP_EVENT_ON_CONNECTED:
         //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
         //     break;
@@ -299,7 +319,7 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
 #endif
         int len = esp_http_client_get_content_length(client);
         local_response_buffer[len]=0;
-        // ILOG(TAG, "[%s] '%s' %d %d", __func__, local_response_buffer, output_len, len);
+        ILOG(TAG, "[%s] '%s' %d %d", __func__, local_response_buffer, output_len, len);
         if (len > 0) {
             while(local_response_buffer[len-1] == '\n' || local_response_buffer[len-1] == '\r' || local_response_buffer[len-1] == ' ') {
                 local_response_buffer[--len]=0;
@@ -323,7 +343,9 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
             memcpy(ota_url+ota_url_len, OTA_URI_BASE, sizeof(OTA_URI_BASE)-1), ota_url_len += sizeof(OTA_URI_BASE)-1;
             assert((ota_url_len + (2*len) + 16 + 8 + 8) < ota_url_size);
             memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;
-            memcpy(ota_url+ota_url_len, "/esp-gps-logger-", 16), ota_url_len += 16;
+            *(ota_url+ota_url_len++) = '/';
+            memcpy(ota_url+ota_url_len, project_name, sizeof(project_name)-1), ota_url_len += sizeof(project_name)-1;
+            *(ota_url+ota_url_len++) = '-';
             memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;     
 #if defined(CONFIG_DISPLAY_DRIVER_SSD1681)
             memcpy(ota_url+ota_url_len, "-ssd1681", 8), ota_url_len += 8;

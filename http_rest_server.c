@@ -8,6 +8,8 @@
 #include "sys/time.h"
 #include <unistd.h>
 
+#include "logger_http_private.h"
+
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -21,7 +23,6 @@
 #include "context.h"
 #include "logger_config.h"
 #include "logger_wifi.h"
-#include "logger_http_private.h"
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
 #include "https_ota.h"
 #endif

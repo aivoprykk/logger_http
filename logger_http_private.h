@@ -7,6 +7,8 @@ extern "C" {
 
 #if (CONFIG_LOGGER_HTTP_LOG_LEVEL <= 2)
 
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
+
 #include "esp_timer.h"
 #include "esp_log.h"
 
