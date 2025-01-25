@@ -31,7 +31,7 @@
 #include "logger_common.h"
 #include "context.h"
 #include "logger_config.h"
-#include "str.h"
+#include "numstr.h"
 
 #include "esp_tls.h"
 

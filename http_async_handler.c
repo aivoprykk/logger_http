@@ -19,7 +19,7 @@
 #include "logger_common.h"
 #include "context.h"
 #include "ota.h"
-#include "str.h"
+#include "numstr.h"
 #include "strbf.h"
 #include "vfs.h"
 #include "adc.h"
