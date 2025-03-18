@@ -1,7 +1,13 @@
 menu "Logger HTTP Module Configuration"
+    config LOGGER_HTTP_ENABLED
+        bool "Enable Logger HTTP Module"
+        default y
+        help
+            Enable Logger HTTP Module
+    if LOGGER_HTTP_ENABLED
     config MDNS_HOST_NAME
         string "mDNS Host Name"
-        default "esp-logger"
+        default "esp"
         help
             Specify the domain name used in the mDNS service.
             Note that webapp also take it as a part of URL where it will send GET/POST requests to.
@@ -39,6 +45,7 @@ menu "Logger HTTP Module Configuration"
         default y
         help
             Use auto update firmware checks
+    if OTA_USE_AUTO_UPDATE
     config OTA_AUTO_UPDATE_TASK_STACK_SIZE
             int "OTA Task stack size in bytes"
             depends on OTA_USE_AUTO_UPDATE
@@ -89,6 +96,7 @@ menu "Logger HTTP Module Configuration"
         help
             This options specifies HTTP request size. Number of bytes specified
             in this option will be downloaded in single HTTP request.
+    endif
     endmenu
     choice
         bool "Default log verbosity"
@@ -116,4 +124,5 @@ menu "Logger HTTP Module Configuration"
         default 3 if LOGGER_HTTP_LOG_LEVEL_ERROR
         default 4 if LOGGER_HTTP_LOG_LEVEL_USER
         default 5 if LOGGER_HTTP_LOG_LEVEL_NONE
+    endif
 endmenu

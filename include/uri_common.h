@@ -1,20 +1,12 @@
-/*
- * Utility functions for protocol examples
- *
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
-
 #ifndef BF1FB47B_5E2F_4E18_8FF2_18A05B076DF3
 #define BF1FB47B_5E2F_4E18_8FF2_18A05B076DF3
-
-#include <stdint.h>
-#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdint.h>
+#include <stddef.h>
 
 /**
  * @brief Encode an URI

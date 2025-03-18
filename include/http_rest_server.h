@@ -2,13 +2,11 @@
 #define HTTP_REST_SERVER_H
 
 
-#include <stdint.h>
-#include "esp_event.h"
-#include "esp_vfs.h" // ESP_VFS_PATH_MAX
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdint.h>
 
 #define R_NONE 1
 #define R_ARCHIVE_LIST 2
@@ -24,7 +22,6 @@ extern "C" {
 #define R_ELSE 12
 #define R_END 13
 
-#define FILE_PATH_MAX (ESP_VFS_PATH_MAX + 209)
 #define SCRATCH_BUFSIZE (1024)
 
 #define CHECK_FILE_EXTENSION(filename, flen, ext, elen) \

@@ -1,0 +1,350 @@
+@use "../node_modules/@picocss/pico/scss/pico" with (
+  $enable-semantic-container: true,
+  $enable-classes: true,
+  $semantic-root-element: "body",
+  $modules: (
+    "content/code": false,
+    "forms/input-color": false,
+    "forms/input-date": false,
+    "forms/input-file": false,
+    "forms/input-range": false,
+    "forms/input-search": false,
+    "components/accordion": false,
+    "components/card": true,
+    "components/dropdown": false,
+    "components/loading": false,
+    "components/modal": true,
+    "components/nav": true,
+    "components/progress": false,
+    "components/tooltip": false,
+    "utilities/accessibility": false,
+    "utilities/reduce-motion": false,
+  )
+);
+
+// @import url("https://fonts.googleapis.com/css?family=Roboto:400");
+
+html {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+body {
+  min-height: 100vh;
+  padding: 0;
+  > header {
+    background-color: rgb(24, 103, 192);
+    box-shadow: 0px 2px 4px -1px rgba(0, 0, 0, 0.2),
+      0px 4px 5px 0px rgba(0, 0, 0, 0.14), 0px 1px 10px 0px rgba(0, 0, 0, 0.12);
+  }
+  > header {
+    max-width: initial;
+    padding: 0 1rem;
+  }
+  > main {
+    min-height: 90vh;
+    @media (max-width: 460px) {
+      padding: 1rem 0;
+    }
+  }
+}
+
+header {
+  nav {
+    li {
+      &:before {
+        content: "";
+        margin-right: 0;
+      }
+      &.active {
+        background-color: rgb(63, 124, 194);
+      }
+    }
+    li,
+    a {
+      color: #f1e8e8;
+    }
+    a {
+      padding: 0.5rem 1rem;
+      &:hover {
+        background-color: rgb(63, 124, 194);
+      }
+      border-radius: 0.5rem;
+    }
+    .sm {
+      display: none;
+    }
+    @media (max-width: 460px) {
+      .sm {
+        display: block;
+      }
+      .lg {
+        display: none;
+      }
+    }
+  }
+}
+
+dialog {
+  border-radius: 0.5rem;
+  box-shadow: 0 0 1rem rgba(0, 0, 0, 0.1);
+  border-width: 1px;
+  padding: 2rem;
+}
+
+button,
+input {
+  line-height: 1;
+  margin: 0.1rem 0.3rem;
+}
+
+input[type="file"] {
+  display: none;
+}
+
+.upload-file-select {
+  display: inline-block;
+  border-bottom: 1px solid var(--pico-primary-border);
+  background-color: var(--pico-background-color);
+  padding: 0.5rem 2rem;
+  @media (max-width: 768px) {
+    padding: 0.5rem 1rem;
+  }
+}
+
+.upload-submit {
+  padding: 0.5rem 1.5rem;
+}
+
+.snackbar {
+  position: fixed;
+  bottom: 1rem;
+  width: 100%;
+  justify-content: center;
+  align-items: center;
+  display: none;
+  .snackbar-inner {
+    background-color: #333;
+    color: #fff;
+    margin: auto;
+    min-width: 16rem;
+    text-align: center;
+    z-index: 1000;
+    padding: 1rem;
+    border-radius: 0.2rem;
+    box-shadow: 0 0 1rem rgba(0, 0, 0, 0.1);
+    .msg {
+      float: left;
+    }
+    .close {
+      float: right;
+      margin-left: 1rem;
+    }
+  }
+  &.open {
+    display: flex;
+  }
+}
+
+.container {
+  .card {
+    border: 1px solid #ccc;
+    border-radius: 0.5rem;
+    box-shadow: 0 0 1rem rgba(0, 0, 0, 0.1);
+    margin-bottom: 1rem;
+    padding: 1rem;
+    margin: auto;
+    .card-header {
+      padding: 1rem;
+      h2,
+      h3 {
+        margin-bottom: 0;
+      }
+    }
+    .card-body {
+      text-align: center;
+      img {
+        max-width: 200px;
+        opacity: 0.8;
+      }
+    }
+    &.home {
+      max-width: 44rem;
+      .card-header {
+        text-align: center;
+        img {
+          max-width: 200px;
+        }
+      }
+      .grid div:first-child {
+        padding: 0.1rem 2rem;
+        text-align: right;
+      }
+      .flexrow {
+        justify-content: center;
+      }
+    }
+    &.config {
+      min-height: 90vh;
+      td {
+        line-break: anywhere;
+        margin: 0;
+        &:first-child {
+          font-weight: 600;
+        }
+        &.name {
+          min-width: 12rem;
+        }
+        &.value {
+          min-width: 18rem;
+          button {
+            line-height: 1;
+            margin: 0.2rem;
+            padding: 0.6rem;
+          }
+        }
+      }
+      select {
+        margin: 0;
+      }
+      @media (max-width: 768px) {
+        td {
+          padding: 0.5rem;
+          &.name {
+            min-width: 8rem;
+          }
+          &.value {
+            min-width: 13rem;
+          }
+        }
+      }
+      @media (max-width: 460px) {
+        padding: 0;
+        td {
+          &.name {
+            min-width: 6rem;
+          }
+          &.value {
+            min-width: 10rem;
+          }
+        }
+      }
+    }
+    &.fwupdate {
+      .card-body {
+        padding: 1rem;
+        text-align: center;
+        button {
+          margin: 0.5rem;
+        }
+      }
+      .card-bottom {
+        font-size: 80%;
+      }
+    }
+    &.files {
+      min-height: 90vh;
+      .card-header {
+        h2 {
+          max-width: 10rem;
+          margin-right: 1rem;
+          margin-bottom: 0;
+        }
+        .info {
+          display: flex;
+          justify-content: space-between;
+          span {
+            line-height: 2rem;
+          }
+        }
+      }
+      table {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        border-collapse: collapse;
+        .dir {
+          line-height: 2.6rem;
+        }
+        td {
+          line-break: anywhere;
+          margin: 0;
+          button {
+            padding: 0.5rem 1rem;
+          }
+          [role="group"] {
+            margin-bottom: 0.1rem;
+          }
+        }
+        a {
+          text-decoration: none;
+        }
+        @media (max-width: 768px) {
+          .dir {
+            line-height: 1.5rem;
+          }
+          td {
+            padding: 0.5rem;
+          }
+          .hide-xs {
+            display: none;
+          }
+        }
+        @media (max-width: 460px) {
+          input {
+            padding: 0;
+            margin: 0;
+          }
+        }
+      }
+    }
+    @media (max-width: 1023px) {
+      max-width: 96%;
+    }
+    @media (max-width: 768px) {
+      max-width: 99%;
+      .upload-submit {
+        padding: 0.5rem 1rem;
+      }
+    }
+    @media (max-width: 460px) {
+      padding: 0;
+      border-width: 0;
+      box-shadow: none;
+      padding-left: 0;
+      padding-right: 0;
+      .card-header {
+        margin-left: 0;
+      }
+    }
+  }
+  .table-2 {
+    width: 100%;
+    display: table;
+    td {
+      text-align: left;
+      &:first-child {
+        text-align: right;
+      }
+    }
+  }
+  .flexrow {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    &.center {
+      justify-content: center;
+      div {
+        margin: 0;
+        padding: 0.2rem 0.5rem;
+      }
+    }
+  }
+  .right {
+    text-align: right;
+  }
+  @media (max-width: 460px) {
+    padding: 1rem 0;
+  }
+}

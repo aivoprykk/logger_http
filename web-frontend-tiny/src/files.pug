@@ -1,0 +1,21 @@
+extends layout.pug
+
+block content
+  main  
+    .container
+      article.card.files
+        header.card-header
+          .flexrow
+            h2 Files
+            .left.selection(style="display:none" invisible)
+              button.outline.dl Download selected
+              button.outline.rm Delete selected
+              button.outline.ar Archive selected
+            .right.upload-file
+              label.upload-file-select
+                span.file-text Upload file
+                input(type="file")
+              button.outline.upload-submit(style="display:none") Upload
+          .flexrow.info
+        .card-body
+          img(src="assets/logo.svg")

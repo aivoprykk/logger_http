@@ -1,13 +1,12 @@
 #ifndef CA04E48E_16BA_4068_8925_26E8ABD75074
 #define CA04E48E_16BA_4068_8925_26E8ABD75074
 
-#include <stdint.h>
-#include "strbf.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#include <stdint.h>
+#include "strbf.h"
 
 #define OTA_HOST_SIZE 24
 #define OTA_PATH_SIZE 64

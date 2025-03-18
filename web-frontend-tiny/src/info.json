@@ -1,0 +1,1 @@
+{"version":"v5.4","cores":2,"model":"esp32s3","revision":1,"fwversion":"1.0.4.6.dev","ap_ssid":"ESPE65C","ap_address":"10.10.10.1","sta_ssid":"majasa","sta_address":"10.0.119.179","hostname":esp-logger","freeheap":6895208,"minfreeheap":6879900,"battery":4.802}

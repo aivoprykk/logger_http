@@ -1,10 +1,11 @@
 
+#include "logger_http_private.h"
+#if defined(CONFIG_LOGGER_HTTP_ENABLED)
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
-#include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_system.h"
@@ -171,3 +172,4 @@ esp_err_t ota_end(struct end_result_s * result) {
     finish:
     return result->status;
 }
+#endif

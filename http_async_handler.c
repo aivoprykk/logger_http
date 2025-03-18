@@ -1,30 +1,43 @@
-
+#include "logger_http_private.h"
+#if defined(CONFIG_LOGGER_HTTP_ENABLED)
 #include <errno.h>
 #include <fcntl.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#include "logger_http_private.h"
-
-#include <esp_event.h>
 #include <esp_http_server.h>
-#include <esp_log.h>
 #include <esp_system.h>
 #include "esp_chip_info.h"
 
+#include "uri_common.h"
 #include "http_async_handler.h"
 #include "http_rest_server.h"
 #include "logger_config.h"
-#include "logger_common.h"
 #include "context.h"
+#if defined(CONFIG_USE_OTA)
 #include "ota.h"
+#endif
 #include "numstr.h"
 #include "strbf.h"
+#if defined(CONFIG_LOGGER_VFS_ENABLED)
 #include "vfs.h"
+#endif
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
 #include "adc.h"
+#endif
+#if defined(CONFIG_UBLOX_ENABLED)
+// #include "ubx.h"
+#endif
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
 #include "logger_wifi.h"
-#include "ubx.h"
+#endif
+#if defined(CONFIG_GPS_LOG_ENABLED)
+#include "gps_user_cfg.h"
+#endif
+#if defined(CONFIG_LOGGER_VFS_ENABLED)
+#include "vfs.h"
+#endif
 
 #define ASYNC_WORKER_TASK_PRIORITY 5
 #define ASYNC_WORKER_TASK_STACK_SIZE 1024 * 3
@@ -35,7 +48,7 @@ static const char *TAG = "asynchandler";
 
 extern struct context_s m_context;
 extern struct context_rtc_s m_context_rtc;
-extern struct m_wifi_context wifi_context;
+extern char base_path[ESP_VFS_PATH_MAX + 1];
 
 // Async reqeusts are queued here while they wait to
 // be processed by the workers
@@ -228,6 +241,10 @@ static const char *http_async_handler_strings[] = {
     "}\n",
     "Access-Control-Allow-Origin",
     "Access-Control-Allow-Methods",
+    ",\"total_space\":",
+    ",\"free_space\":",
+    "</td></tr><tr><td>",
+    "</td><td>"
 };
 
 static esp_err_t http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, int status, char * data, int data_size) {
@@ -298,9 +315,10 @@ static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char
     ILOG(TAG, "[%s]", __func__);
     int ret = ESP_OK;
     strbf_t sb;
+#ifdef CONFIG_LOGGER_VFS_ENABLED
     char tmp[PATH_MAX_CHAR_SIZE];
     strbf_inits(&sb, tmp, PATH_MAX_CHAR_SIZE);
-    strbf_put_path(&sb, base);
+    if(base) strbf_put_path(&sb, base);
     strbf_put_path(&sb, "Archive");
     if (!s_xfile_exists(strbf_finish(&sb))) {
         ret = mkdir(sb.start, 0755);
@@ -315,6 +333,7 @@ static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char
     strbf_put_path(&sb, p);
     DLOG(TAG, "Move to arcive %s => %s", filename, sb.start);
     ret = s_rename_file_n(filename, sb.start, 0);
+#endif
     return ret;
 }
 
@@ -376,26 +395,13 @@ static esp_err_t config_handler_json(httpd_req_t *req, strbf_t *sb, const char *
 #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
-    // config_get_json(m_context.config, sb, str, g_context_get_ubx_hw(&m_context));
     const logger_config_t *config = m_context.config;
-    const uint8_t ublox_hw = g_context_get_ubx_hw(&m_context);
-    size_t flush_size = blen, len = 0;
-    char tmp_buf[24] = {0};
-    char *p = 0;
-#define CONF_GETC(a)                                    \
-    p = config_get(config, a, buf, &len, blen, 1, ublox_hw); \
-    if (len) {                                          \
-        strbf_puts(sb, p);                               \
-    }
-#define CONF_GET(a, i) \
-    p = config_get(config, a, buf, &len, blen, 1, ublox_hw); \
-    if (len) {                                            \
-        if(i>0) strbf_putc(sb, ',');                              \
-        strbf_puts(sb, p);                               \
-    }
-
+    // const uint8_t ublox_hw = g_context_get_ubx_hw(&m_context);
+    size_t flush_size = blen;
+    
     if (str) {
-        CONF_GETC(str);
+        gps_config_get(str, sb, 1);
+        if(sb->cur == sb->start) config_get(config, str, sb, 1);
         if(sb->cur > sb->start){
             httpd_resp_set_status(req, HTTPD_200);
         }
@@ -412,41 +418,33 @@ static esp_err_t config_handler_json(httpd_req_t *req, strbf_t *sb, const char *
 
         const char *start_ptr = config_item_names;
         const char *end_ptr = 0;
-        int i = 0, token_length=0;
-        // Use strtok to iterate over the comma-separated values
-        while ((end_ptr = strchr(start_ptr, '|')) != NULL||(end_ptr = strchr(start_ptr, ',')) != NULL) {
-            while(*start_ptr==' ') ++start_ptr;
-            token_length = end_ptr - start_ptr;
-            while(*(start_ptr+token_length-1)==' ') --token_length;
-            if (token_length > 0) {
-                if(token_length >= 24) {
-                    ESP_LOGE(TAG, "Token length too long: %d for %s", token_length, start_ptr);
-                } else {
-                    memcpy(tmp_buf, start_ptr, token_length);
-                    tmp_buf[token_length] = 0;
-                    CONF_GET(tmp_buf, i);
-                    if(sb->cur - sb->start >= flush_size) {
-                        httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
-                        strbf_shape(sb, 0);
-                    }
-                }
+        
+        for(uint8_t i = 0; i < gps_user_cfg_item_count; i++) {
+            if(gps_cnf_get_item(i+CFG_GPS_ITEM_BASE, sb, 1) >= 253) {
+                continue;
             }
-            start_ptr = end_ptr + 1; 
-            ++i;
+            strbf_putc(sb, ',');
+            strbf_putc(sb, '\n');
+            if(sb->cur - sb->start >= flush_size) {
+                httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
+                strbf_shape(sb, 0);
+            }
         }
-        // Handle the last token (or the only one if no commas were found)
-        while(start_ptr && *start_ptr && *start_ptr==' ') ++start_ptr;
-        if (start_ptr && *start_ptr) { // Check if there's anything left
-            CONF_GET(start_ptr, i); // Directly use startPtr as it's already null-terminated
-            if (sb->cur - sb->start >= flush_size) {
+        for(uint8_t i = 0; i < config_item_count; i++) {
+            if(cnf_get_item(config, i, sb, 1) >= 253) {
+                continue;
+            }
+            if(i < config_item_count-1) {
+                strbf_putc(sb, ',');
+                strbf_putc(sb, '\n');
+            }
+            if(sb->cur - sb->start >= flush_size) {
                 httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
                 strbf_shape(sb, 0);
             }
         }
         strbf_puts(sb, "]\n");
     }
-#undef CONF_GETC
-#undef CONF_GET
     if(sb->cur > sb->start) {
         httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
         return ESP_OK;
@@ -465,9 +463,16 @@ static esp_err_t system_bat_get_handler(httpd_req_t * req) {
 #ifdef USE_CUSTOM_CALIBRATION_VAL
     len = f3_to_char(volt_read(m_context_rtc.RTC_calibration_bat), buf);
 #else
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
     len = f3_to_char(volt_read(), buf);
 #endif
-    httpd_resp_send_chunk(req, buf, len);
+#endif
+    if(len) {
+        httpd_resp_send_chunk(req, buf, len);
+    }
+    else {
+        httpd_resp_send_chunk(req, "0", 1);
+    }
     httpd_resp_send_chunk(req, http_async_handler_strings[3], 2); // }\n
     httpd_resp_send_chunk(req, 0, 0);
     return ESP_OK;
@@ -478,67 +483,187 @@ static int uint8_array_to_ipv4_string(uint8_t *ipv4, char *buf) {
 }
 
 /* Simple handler for getting system handler */
-static esp_err_t system_info_get_handler(httpd_req_t *req) {
+static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, char * buf, size_t blen) {
     ILOG(TAG, "[%s]", __func__);
-    char buf[16] = {0};
-    size_t len = 0;
+    char lbuf[16] = {0};
+    size_t llen = 0;
+    strbf_t databuf;
+    strbf_inits(&databuf, buf, blen);
+    size_t flush_size = SCRATCH_BUFSIZE-128;
 #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
-    httpd_resp_send_chunk(req, "{\"version\":\"", 12);
-    httpd_resp_send_chunk(req, IDF_VER, strlen(IDF_VER));
-    httpd_resp_send_chunk(req, "\",\"cores\":", 10);
-    len = xltoa(chip_info.cores, buf);
-    httpd_resp_send_chunk(req, buf, len);
-    httpd_resp_send_chunk(req, ",\"model\":\"", 10);
-    httpd_resp_send_chunk(req, chip_info.model == 1 ? "esp32" : "esp32s2", chip_info.model == 1 ? 5 : 7);
-    httpd_resp_send_chunk(req, "\",\"revision\":", 13);
-    len = xltoa(chip_info.revision, buf);
-    httpd_resp_send_chunk(req, buf, len);
-    httpd_resp_send_chunk(req, ",\"fwversion\":\"", 14);
-    httpd_resp_send_chunk(req, m_context.SW_version, strlen(m_context.SW_version));
+    if(mode == 2) { 
+        strbf_puts(&databuf, "<table class=\"table-2\"><tr><td>IDF version");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, "{\"version\":\"");
+    strbf_puts(&databuf, IDF_VER);
+    if(mode == 2) { 
+        strbf_puts(&databuf, http_async_handler_strings[8]);
+        strbf_puts(&databuf,"Cores");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, "\",\"cores\":");
+    strbf_putl(&databuf,chip_info.cores);
+    if(mode == 2) { 
+        strbf_puts(&databuf, http_async_handler_strings[8]);
+        strbf_puts(&databuf,"Model");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, ",\"model\":\"");
+    strbf_puts(&databuf, "esp32");
+    if(chip_info.model != 1) strbf_put(&databuf, "s3", 2);
+    if(mode == 2) { 
+        strbf_puts(&databuf, http_async_handler_strings[8]);
+        strbf_puts(&databuf,"Revision");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, "\",\"revision\":");
+    strbf_putl(&databuf, chip_info.revision);
+    if(mode == 2) { 
+        strbf_puts(&databuf, http_async_handler_strings[8]);
+        strbf_puts(&databuf,"Fwversion");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, ",\"fwversion\":\"");
+    strbf_puts(&databuf, m_context.SW_version);
+    #if defined(CONFIG_LOGGER_WIFI_ENABLED)
     if(wifi_context.s_ap_connection) {
-        httpd_resp_send_chunk(req, "\",\"ap_ssid\":\"", 13);
-        httpd_resp_send_chunk(req, wifi_context.ap.ssid, strlen(wifi_context.ap.ssid));
-        httpd_resp_send_chunk(req, "\",\"ap_address\":\"", 16);
-        len = uint8_array_to_ipv4_string(wifi_context.ap.ipv4_address, &buf[0]);
-        httpd_resp_send_chunk(req, buf, len);
+        if(mode == 2) { 
+            strbf_puts(&databuf, http_async_handler_strings[8]);
+            strbf_puts(&databuf,"Ap_ssid");
+            strbf_puts(&databuf, http_async_handler_strings[9]);
+        } else strbf_puts(&databuf, "\",\"ap_ssid\":\"");
+        strbf_puts(&databuf, wifi_context.ap.ssid);
+        if(mode == 2) { 
+            strbf_puts(&databuf, http_async_handler_strings[8]);
+            strbf_puts(&databuf,"Ap_address");
+            strbf_puts(&databuf, http_async_handler_strings[9]);
+        } else strbf_puts(&databuf, "\",\"ap_address\":\"");
+        llen = uint8_array_to_ipv4_string(wifi_context.ap.ipv4_address, &lbuf[0]);
+        strbf_put(&databuf, lbuf, llen);
     }
     if(wifi_context.s_sta_connection) {
-        httpd_resp_send_chunk(req, "\",\"sta_ssid\":\"", 14);
+        if(mode == 2) { 
+            strbf_puts(&databuf, http_async_handler_strings[8]);
+            strbf_puts(&databuf,"Sta_sid");
+            strbf_puts(&databuf, http_async_handler_strings[9]);
+        } else strbf_puts(&databuf, "\",\"sta_ssid\":\"");
         if(wifi_context.s_sta_got_ip)
-         httpd_resp_send_chunk(req, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, strlen(wifi_context.stas[wifi_context.s_sta_num_connect].ssid));
-        httpd_resp_send_chunk(req, "\",\"sta_address\":\"", 17);
+         strbf_puts(&databuf, wifi_context.stas[wifi_context.s_sta_num_connect].ssid);
+        if(mode == 2) { 
+            strbf_puts(&databuf, http_async_handler_strings[8]);
+            strbf_puts(&databuf,"Sta_address");
+            strbf_puts(&databuf, http_async_handler_strings[9]);
+        } else strbf_puts(&databuf, "\",\"sta_address\":\"");
         if(wifi_context.s_sta_got_ip)
-            len = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &buf[0]);
-        httpd_resp_send_chunk(req, buf, len);
+            llen = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &lbuf[0]);
+        strbf_put(&databuf, lbuf, llen);
     }
-    httpd_resp_send_chunk(req, "\",\"hostname\":\"", 14);
-    httpd_resp_send_chunk(req, wifi_context.hostname, strlen(wifi_context.hostname));
-    httpd_resp_send_chunk(req, "\",\"freeheap\":", 13);
-    len = xltoa(esp_get_free_heap_size(), buf);
-    httpd_resp_send_chunk(req, buf, len);
-    httpd_resp_send_chunk(req, ",\"minfreeheap\":", 15);
-    len = xltoa(esp_get_minimum_free_heap_size(), buf);
-    httpd_resp_send_chunk(req, buf, len);
-    httpd_resp_send_chunk(req, ",\"battery\":", 11);
-    len = f3_to_char(volt_read(), buf);
-    httpd_resp_send_chunk(req, buf, len);
-    httpd_resp_send_chunk(req, http_async_handler_strings[3], 2); // }\n
-    httpd_resp_send_chunk(req, 0, 0);
+    #endif
+    if(mode == 2) { 
+        strbf_puts(&databuf, http_async_handler_strings[8]);
+        strbf_puts(&databuf,"Hostname");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, "\",\"hostname\":\"");
+    strbf_puts(&databuf, wifi_context.hostname);
+    if(mode == 2) { 
+        strbf_puts(&databuf, http_async_handler_strings[8]);
+        strbf_puts(&databuf,"Freeheap");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, "\",\"freeheap\":");
+    strbf_putl(&databuf, esp_get_free_heap_size());
+    if(mode == 2) { 
+        strbf_puts(&databuf, http_async_handler_strings[8]);
+        strbf_puts(&databuf,"Minfreeheap");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, ",\"minfreeheap\":");
+    strbf_putl(&databuf, esp_get_minimum_free_heap_size());
+    if(mode == 2) { 
+        strbf_puts(&databuf, http_async_handler_strings[8]);
+        strbf_puts(&databuf,"Battery");
+        strbf_puts(&databuf, http_async_handler_strings[9]);
+    } else strbf_puts(&databuf, ",\"battery\":");
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    llen = f3_to_char(volt_read(), lbuf);
+#endif
+    if(llen) {
+        strbf_put(&databuf, lbuf, llen);
+    } else {
+        strbf_putc(&databuf, '0');
+    }
+    if(mode == 2) { 
+        strbf_puts(&databuf, "</td></tr></table>");
+    } else strbf_puts(&databuf, http_async_handler_strings[3]); // }\n
+    httpd_resp_send_chunk(req, databuf.start, databuf.cur - databuf.start);
     return ESP_OK;
 }
 
-static esp_err_t directory_handler(httpd_req_t *req, const char *path, const char *match, uint8_t mode, char * buf, size_t blen) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+static esp_err_t paths_handler(httpd_req_t *req, uint8_t mode, char * buf, size_t blen) {
+    ILOG(TAG, "[%s]", __func__);
     DIR *dirp = NULL;
     const struct dirent *ent;
     char type;
     char size[16] = {0};
-    char tpath[FILE_PATH_MAX];
+    char tpath[VFS_FILE_PATH_MAX];
+    char tbuffer[92] ={0};
+    uint8_t i = 0;
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
+    task_memory_info(__func__);
+#endif
+    httpd_resp_set_type(req, mode==1 ? HTTPD_TYPE_JSON : HTTPD_TYPE_TEXT);
+    strbf_t databuf;
+    strbf_inits(&databuf, buf, blen);
+    size_t flush_size = SCRATCH_BUFSIZE-128;
+    if(mode==1)
+        httpd_resp_send_chunk(req, "{\"paths\": [", 11);
+    while(i < VFS_MAX_PARTS) {
+        if(vfs_ctx.parts[i].is_mounted) {
+            if(i > 0) {
+                if(mode==1)
+                    strbf_putc(&databuf, ',');
+                else
+                    strbf_putc(&databuf, '\n');
+            }
+            if(mode==1)
+                strbf_puts(&databuf, "{\"path\":\"");
+            else
+                strbf_puts(&databuf, "Path: ");
+            strbf_puts(&databuf, vfs_ctx.parts[i].mount_point);
+            strbf_putc(&databuf, '"');
+            if(mode==1)
+                strbf_put(&databuf, http_async_handler_strings[6], 15);
+            else
+                strbf_puts(&databuf, ", Total bytes: ");
+            strbf_putul(&databuf, vfs_ctx.parts[i].total_bytes);
+            if(mode==1)
+                strbf_put(&databuf, http_async_handler_strings[7], 14);
+            else
+                strbf_puts(&databuf, ", Free bytes: ");
+            strbf_putul(&databuf, vfs_ctx.parts[i].free_bytes);
+            if(mode==1)
+                strbf_putc(&databuf, '}');
+            if(databuf.cur - databuf.start >= flush_size) {
+                httpd_resp_send_chunk(req, databuf.start, databuf.cur - databuf.start);
+                strbf_shape(&databuf, 0);
+            }
+        }
+        i++;
+    }
+    if(databuf.cur - databuf.start > 0) {
+        httpd_resp_send_chunk(req, databuf.start, databuf.cur - databuf.start);
+    }
+    if(mode==1)
+        httpd_resp_send_chunk(req, "]\n}", 3);
+    return ESP_OK;
+}
+
+static esp_err_t directory_handler(httpd_req_t *req, const char *path, const char *match, uint8_t mode, char * buf, size_t blen) {
+    ILOG(TAG, "[%s] uri: %s, path: %s", __func__, req->uri, path ? path : "null");
+    DIR *dirp = NULL;
+    const struct dirent *ent;
+    char type;
+    char size[16] = {0};
+    char tpath[VFS_FILE_PATH_MAX];
     char tbuffer[92] ={0};
     struct stat statbuf;
     struct tm *tm_info;
@@ -571,7 +696,7 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     strbf_t databuf, pathbuf;
     
     // path buffer
-    strbf_inits(&pathbuf, tpath, FILE_PATH_MAX);
+    strbf_inits(&pathbuf, tpath, VFS_FILE_PATH_MAX);
     strbf_puts(&pathbuf, path);
     size_t len = pathbuf.cur - pathbuf.start;
 
@@ -583,7 +708,8 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     if(mode==1) {
         httpd_resp_send_chunk(req, "{\"path\":\"", 9);
         httpd_resp_send_chunk(req, path, len);
-        httpd_resp_send_chunk(req, "\",\"data\":[", 10);
+        httpd_resp_send_chunk(req, "\"", 1);
+        httpd_resp_send_chunk(req, ",\"data\":[", 9);
     }
     else {
         httpd_resp_send_chunk(req, "T  Size      Date/Time         Name\n-----------------------------------\n", 72);
@@ -687,6 +813,149 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     return ESP_OK;
 }
 
+static const char * html_handler_str[] = {
+    "<!DOCTYPE html><html lang=\"en\"><head><title>ESP-LOGGER ::",
+    "</title><meta charset=\"utf-8\"><link rel=\"stylesheet\" href=\"index.css\"><script src=\"index.js\"></script>"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head><body><header><nav><ul>"
+    "<li class=\"brand\"><span class=\"lg\">ESP-LOGGER</span><span class=\"sm\">GPS</span></li></ul><ul><li class=\"home\">"
+    "<a class=\"secondary\" href=\"/\">Home</a></li><li class=\"files\"><a class=\"secondary\" href=\"/files.html\">"
+    "Files</a></li><li class=\"config\"><a class=\"secondary\" href=\"/config.html\">Config</a></li>"
+    "<li class=\"fwupdate\"><a class=\"secondary\" href=\"/fwupdate.html\">FW Update</a></li></ul></nav></header>"
+    "<main><div class=\"container\"><article class=\"card ",
+    "\"><header class=\"card-header\"><div class=\"flexrow\">",
+    "<img src=\"/logo.svg\" alt=\"Logger\" />",
+    "<h2>Files</h2><div class=\"left selection\" style=\"display:none\" hidden><button class=\"outline dl\">Download selected</button>"
+    "<button class=\"outline rm\">Delete selected</button><button class=\"outline ar\">Archive selected</button></div><div class=\"right upload-file\">"
+    "<label class=\"upload-file-select\"><span class=\"file-text\">Upload file</span><input type=\"file\" /></label><button class=\"outline upload-submit\" style=\"display:none\">Upload</button>"
+    "</div></div><div class=\"flexrow info\">",
+    "<h2>Configuration</h2>",
+    "<h2>Firmware update</h2>",
+    "</div></header><div class=\"card-body",
+    " upload-file\"><label class=\"upload-file-select\"><span class=\"file-text\">Select firmware file</span><input type=\"file\" /></label>"
+    "<button class=\"outline upload-submit\">Upload</button></div><footer class=\"card-bottom\"><span>Current firmware version: </span><span class=\"fwver-text\"></span></footer>",
+    "\">",
+    "</article></div></main></html>\r\n",
+};
+
+static esp_err_t http_resp_file_html_handler(httpd_req_t *req, const char *name, char * buf, size_t blen) {
+    ILOG(TAG, "[%s]", __func__);
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_sendstr_chunk(req, html_handler_str[0]);
+    httpd_resp_sendstr_chunk(req, name);
+    httpd_resp_sendstr_chunk(req, html_handler_str[1]);
+    httpd_resp_sendstr_chunk(req, name);
+    httpd_resp_sendstr_chunk(req, html_handler_str[2]);
+    if(!strcmp(name, "home")){ 
+        httpd_resp_sendstr_chunk(req, html_handler_str[3]);
+    }
+    else if(!strcmp(name,  "files")) {
+        httpd_resp_sendstr_chunk(req, html_handler_str[4]);
+    }
+    else if(!strcmp(name, "config")) {
+         httpd_resp_sendstr_chunk(req, "<h2>Configuration</h2>");
+    }
+    else if(!strcmp(name, "fwupdate")) {
+         httpd_resp_sendstr_chunk(req, "<h2>Firmware update</h2>");
+    }
+    httpd_resp_sendstr_chunk(req, html_handler_str[7]);
+    if(!strcmp(name,"fwupdate")) {
+        httpd_resp_sendstr_chunk(req, html_handler_str[8]);
+    } else {
+        httpd_resp_sendstr_chunk(req, "\">");
+        if(!strcmp(name, "home")){
+            system_info_get_handler(req, 2, buf, blen);
+        } else {
+            httpd_resp_sendstr_chunk(req, html_handler_str[3]); // logo
+        }
+        httpd_resp_sendstr_chunk(req, "</div>");
+    }
+    httpd_resp_sendstr_chunk(req, html_handler_str[10]);
+    return ESP_OK;
+}
+
+static esp_err_t css_get_handler(httpd_req_t *req) {
+    ILOG(TAG, "[%s]", __func__);
+    extern const unsigned char index_css_start[] asm("_binary_index_css_gz_start");
+    extern const unsigned char index_css_end[]   asm("_binary_index_css_gz_end");
+    const size_t index_css_size = (index_css_end - index_css_start);
+    if(!index_css_size) {
+        WLOG(TAG, "[%s] embed index_css not found", __func__);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "text/css");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_send(req, (const char *)index_css_start, index_css_size);
+    return ESP_OK;
+}
+
+static esp_err_t js_get_handler(httpd_req_t *req) {
+    ILOG(TAG, "[%s]", __func__);
+    extern const unsigned char index_js_start[] asm("_binary_index_js_gz_start");
+    extern const unsigned char index_js_end[]   asm("_binary_index_js_gz_end");
+    const size_t index_js_size = (index_js_end - index_js_start);
+    if(!index_js_size) {
+        WLOG(TAG, "[%s] embed index_js not found", __func__);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/javascript");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_send(req, (const char *)index_js_start, index_js_size);
+    return ESP_OK;
+}
+
+static esp_err_t logo_get_handler(httpd_req_t *req) {
+    ILOG(TAG, "[%s]", __func__);
+    extern const unsigned char logo_svg_start[] asm("_binary_logo_svg_gz_start");
+    extern const unsigned char logo_svg_end[]   asm("_binary_logo_svg_gz_end");
+    const size_t logo_svg_size = (logo_svg_end - logo_svg_start);
+    if(!logo_svg_size) {
+        WLOG(TAG, "[%s] embed logo_svg not found", __func__);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "image/svg+xml");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_send(req, (const char *)logo_svg_start, logo_svg_size);
+    return ESP_OK;
+}
+
+static esp_err_t try_local_file(httpd_req_t *req, size_t ulen, const char *name, char * buf, size_t blen) {
+    ILOG(TAG, "[%s]", __func__);
+    char tmp[16] = {0};
+    const char *p;
+    size_t tlen = 0;
+    if(!ulen) goto index;
+    if(*(p = req->uri) == '/') {
+        while(++p && *p &&*p != '/' && *p != '.');
+        if(p && *p == '.' && p-req->uri < 16) {
+            tlen = p-req->uri-1;
+            memcpy(tmp, req->uri+1, tlen);
+            tmp[tlen] = 0;
+        }
+    }
+    // WLOG(TAG, "[%s] found file name %s ext %s or not.", __func__, &tmp[0], p ? p : "-");
+    if((*req->uri == '/' && ulen == 1) || (tmp[0] && !strcmp(p, ".html"))) {
+        index:
+        if((!tmp[0] || !strcmp(tmp, "index")) && !http_resp_file_html_handler(req, "home", buf, blen)) {
+            goto finishing;
+        }
+        else if((!strcmp(tmp, "files") || !strcmp(tmp, "config") || !strcmp(tmp, "fwupdate")) && !http_resp_file_html_handler(req, &tmp[0], buf, blen)) {
+            goto finishing;
+        }
+    }
+    else if(tmp[0] && !strcmp(tmp, "index")){
+        if((!strcmp(p, ".css") && !css_get_handler(req)) || (!strcmp(p, ".js") && !js_get_handler(req))) {
+            goto finishing;
+        }
+    }
+    else if(tmp[0] && !strcmp(req->uri+1, "logo.svg")) {
+        if(!logo_get_handler(req))
+            goto finishing;
+    }
+    return ESP_FAIL;
+    finishing:
+    return ESP_OK;
+}
+
 /* Send HTTP response with the contents of the requested file */
 esp_err_t rest_async_get_handler(httpd_req_t *req) {
     ILOG(TAG, "[%s] %s", __func__, req->uri);
@@ -705,7 +974,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
         }
     }
 #endif
-    char filepath[FILE_PATH_MAX] = {0};
+    char filepath[VFS_FILE_PATH_MAX] = {0};
     char strbuf[SCRATCH_BUFSIZE] = {0};
     rest_server_context_t *rest_context = (rest_server_context_t *)req->user_ctx;
     assert(rest_context);
@@ -714,16 +983,19 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
     strbf_t buf;
     strbf_init(&buf);
     strbf_t pathbuf;
-    strbf_inits(&pathbuf, filepath, FILE_PATH_MAX);
+    strbf_inits(&pathbuf, filepath, VFS_FILE_PATH_MAX);
     size_t ulen = strlen(req->uri), tlen = 0;
     struct stat sb = {0};
-    int statok, fd = 0;
+    int statok = 0, fd = 0;
     const char *p = 0;
     uint8_t del_flag = 0, archive_flag = 0;
     char *data = 0;
     int err = 0;
-    bool base_path_needed = 0;
-    if (strstr(req->uri, "/api/v1/") == req->uri) {
+    uint8_t base_path_needed = 0;
+    if(try_local_file(req, ulen, 0, strbuf, SCRATCH_BUFSIZE) == ESP_OK) {
+        goto finishing;
+    }
+    else if (strstr(req->uri, "/api/v1/") == req->uri) {
         tlen = 8;
         esp_err_t err = httpd_resp_set_hdr(req, http_async_handler_strings[4], "*");
         if (err != ESP_OK) {
@@ -767,6 +1039,9 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             }
             httpd_resp_set_type(req, HTTPD_TYPE_JSON);
             config_handler_json(req, &buf, r, &strbuf[0], SCRATCH_BUFSIZE);
+        } else if(strstr(uri, "paths") == uri) {
+            paths_handler(req, 1, &strbuf[0], SCRATCH_BUFSIZE);
+            goto finishing;
         } else if (strstr(uri, "login") == uri) {
             httpd_resp_set_type(req, HTTPD_TYPE_JSON);
             httpd_resp_set_status(req, HTTPD_200);
@@ -779,7 +1054,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             strbf_puts(&buf, "\"}");
             http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0, buf.start, buf.cur-buf.start);
         } else if (strstr(uri, "system/info") == uri) {
-            system_info_get_handler(req);
+            system_info_get_handler(req, 0, &strbuf[0], SCRATCH_BUFSIZE);
             goto finishing;
         } else if (strstr(uri, "system/bat") == uri) {
             httpd_resp_set_type(req, HTTPD_TYPE_JSON);
@@ -794,9 +1069,17 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             tlen = 13;
         process_file:
             p = req->uri + tlen;
+            if(*(req->uri + tlen) == '.') { // static files.html
+                p = req->uri;
+            }
             if(base_path_needed) {
                 strbf_shape(&pathbuf, 0);
-                strbf_puts(&pathbuf, CONFIG_SD_MOUNT_POINT);
+                if(base_path_needed == 1 && *(req->uri + tlen) == '.') { // static files.html
+                    strbf_puts(&pathbuf, rest_context->base_path);
+                } else {
+                    strbf_puts(&pathbuf, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
+                }
+                *pathbuf.cur = 0;
             }
             const char *r = p;
             if (ulen > tlen && *p == '/') {
@@ -811,11 +1094,19 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
                 }
             }
             if (!del_flag && !archive_flag) {
-                strbf_put_path(&pathbuf, p);
+                r=p;
+                while (r && *r) ++r;
+                if((pathbuf.cur>pathbuf.start && *(pathbuf.cur-1)!='/') && *p != '/') strbf_putc(&pathbuf, '/');
+                s_uri_decode(pathbuf.cur, p, r - p);
+                //strbf_put_path_n(&pathbuf, p, r - p);
             } else if (r > p) {
-                strbf_put_path_n(&pathbuf, p, r - p);
+                if((pathbuf.cur>pathbuf.start && *(pathbuf.cur-1)!='/') && *p != '/') strbf_putc(&pathbuf, '/');
+                s_uri_decode(pathbuf.cur, p, r - p);
+                //strbf_put_path_n(&pathbuf, p, r - p);
             }
-            DLOG(TAG, "[%s] base directory: filepath: %s p: %s r: %s", __FUNCTION__, filepath, p, r);
+            while(pathbuf.cur && *pathbuf.cur) ++pathbuf.cur;
+            *pathbuf.cur = 0;
+            ILOG(TAG, "[%s] filepath:%s p:%s r:%s len:%d", __FUNCTION__, filepath, p, r, r-p);
             statok = stat(strbf_finish(&pathbuf), &sb);
             if (statok == 0) {
                 if (S_ISDIR(sb.st_mode)) {
@@ -830,8 +1121,8 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
                     else
                         goto get_file;  // file
                 }
-            } else if(!base_path_needed) {
-                base_path_needed = 1;
+            } else if(base_path_needed<2) {
+                ++base_path_needed;
                 goto process_file;
             } else {
                 httpd_resp_set_type(req, HTTPD_TYPE_JSON);
@@ -861,12 +1152,12 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
         statok = stat(pathbuf.start, &sb);
     get_file:
         fd = open(&(filepath[0]), O_RDONLY, 0);
-        if (fd < 0 && strcmp(rest_context->base_path, CONFIG_SD_MOUNT_POINT)) {
+        if (fd < 0 && strcmp(rest_context->base_path, &base_path[0])) {
             if ((ulen == 1 && *req->uri == '/') || strstr(req->uri, "/index.html") == req->uri) {
                 goto get_index;
             }
             strbf_shape(&pathbuf, 0);
-            strbf_puts(&pathbuf, CONFIG_SD_MOUNT_POINT);
+            strbf_puts(&pathbuf, &base_path[0]);
             strbf_put_path(&pathbuf, req->uri);
             strbf_finish(&pathbuf);
             DLOG(TAG, "2. oopen file : %s", pathbuf.start);
@@ -885,8 +1176,9 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
             if (fd) {
                 char hostname[24] = {0};
                 char tmp[8] = {0}, *be = hostname;
-                size_t bl = 0, hl = strlen(wifi_context.hostname);
+                size_t bl = 0, hl = 0;
                 memcpy(be, "http://", 7), be+=7;
+                hl= strlen(wifi_context.hostname);
                 memcpy(be, wifi_context.hostname, hl), be+=hl;
                 memcpy(be, ".local", 6), be+=6;
                 *be++ = '/', *be = 0;
@@ -957,7 +1249,7 @@ esp_err_t rest_async_get_handler(httpd_req_t *req) {
         httpd_resp_set_type(req, HTTPD_TYPE_JSON);
         
         if (archive_flag)
-            err = archive_file(req, pathbuf.start, CONFIG_SD_MOUNT_POINT);
+            err = archive_file(req, pathbuf.start, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point); // was &base_path[0]
         else
             err = unlink(pathbuf.start);
 
@@ -1013,15 +1305,27 @@ struct mpart_s {
         --mpb;                                                        \
     }
 
-esp_err_t delete_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data) {
+typedef esp_err_t (*manage_file_cb_t)(httpd_req_t *req, const char *fname);
+
+static esp_err_t delete_file_cb(httpd_req_t *req, const char *fname) {
+    ILOG(TAG, "[%s] %s", __func__, fname);
+    return unlink(fname);
+}
+
+static esp_err_t archive_file_cb(httpd_req_t *req, const char *fname) {
+    ILOG(TAG, "[%s] %s", __func__, fname);
+    return archive_file(req, fname, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
+}
+
+static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data, manage_file_cb_t cb, const char * action_name) {
     assert(data);
-    ILOG(TAG, "[%s] %s", __func__, data->start);
+    ILOG(TAG, "[%s] %s %s", __func__, data->start, action_name ? action_name : "null");
     char * p = 0, *r = 0, *e = 0;
     if(data->start && data->cur > data->start) {
         strbf_t fbuf;
         p = data->start;
         strbf_inits(&fbuf, fname, flen);
-        strbf_puts(&fbuf, CONFIG_SD_MOUNT_POINT);
+        // strbf_puts(&fbuf, &base_path[0]);
         size_t len = fbuf.cur - fbuf.start;
         if((p=strchr(p, '{'))) { // json
             if((p=strstr(p, "\"name\":\""))) {
@@ -1041,19 +1345,23 @@ esp_err_t delete_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data
             r = strchr(p, '|');
             if(!r) r = strchr(p, ',');
             if((!r && e) || (r && e && r > e) ) r = e;
+            if(*(fbuf.cur-1)!='/' && *p != '/') strbf_putc(&fbuf, '/');
             if(r) {
                 if(((fbuf.cur-fbuf.start) + (r-p) + 1) >= flen){
                     return http_send_json_msg(req, "Filename too long.", 18, 2, 0, 0);
                 }
-                strbf_put_path_n(&fbuf, p, r-p);
+                s_uri_decode(fbuf.cur, p, r - p);
+                // strbf_put_path_n(&fbuf, p, r-p);
             } else {
-                strbf_put_path(&fbuf, p);
+                s_uri_decode(fbuf.cur, p, e - p);
+                // strbf_put_path(&fbuf, p);
             }
+            while(fbuf.cur && *fbuf.cur) ++fbuf.cur;
             *fbuf.cur = 0;
 #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
-            printf("delete file: %s\n", fbuf.start);
+            printf("%s file: %s\n", action_name, fbuf.start);
 #endif
-            if (unlink(fbuf.start)) {
+            if (!cb || cb(req, strbf_finish(&fbuf))) {
                 return http_send_json_msg(req, "Failed", 6, 3, 0, 0);
             }
             p=r;
@@ -1062,8 +1370,9 @@ esp_err_t delete_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data
     } else {
         return http_send_json_msg(req, "No data.", 8, 1, 0, 0);
     }
-    return http_send_json_msg(req, "deleted.", 8, 0, 0, 0);
+    return http_send_json_msg(req, action_name, strlen(action_name), 0, 0, 0);
 }
+
 /* A long running HTTP GET handler */
 esp_err_t post_async_handler(httpd_req_t *req) {
     ILOG(TAG, "[%s] %s", __func__, req->uri);
@@ -1231,20 +1540,28 @@ esp_err_t post_async_handler(httpd_req_t *req) {
                     if (!fname[0])  // no file name, no upload
                         goto toerr;
                     else if (fp < 0) {
-                        char path[16] = {0}, *p=0;
+                        char path[128] = {0};
+                        const char *p = req->uri, *e = req->uri;
                         strbf_t pbuf;
-                        strbf_inits(&pbuf, path, 16);
-                        strbf_put_path(&pbuf, CONFIG_SD_MOUNT_POINT);
-                        if((p=strstr(req->uri, "/files/"))) {
-                            strbf_put_path(&pbuf, p+7);
+                        while(e && *e) ++e;
+                        strbf_inits(&pbuf, path, MIN(e-p+1, 128));
+                        // strbf_put_path(&pbuf, &base_path[0]);
+                        
+                        if((p=strstr(req->uri, "/files/")) && p[7]) {
+                            p+=7;
+                            while(*p && *p == '/') ++p;
+                            while(*p && *p != '/') --p;
+                            strbf_put_path_n(&pbuf, p, MIN(e-p, 128));
+                            if(e-p>128) {
+                                WLOG(TAG, "Too long path, max allowed 128 bytes: %s", pbuf.start);
+                            }
+                        } else {
+                            strbf_put_path(&pbuf, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
                         }
 #if CONFIG_LOGGER_HTTP_LOG_LEVEL < 2
                         printf("[%s] open path: %s name: %s\n", __FUNCTION__, pbuf.start, fname);
 #endif
                         fp = s_open(fname, pbuf.start, "w+");
-                        if (fp < 0) {
-                            fp = s_open(fname, CONFIG_SD_MOUNT_POINT, "w+");
-                        }
                     }
                     if (fp >= 0) {
                         write(fp, parts[0].start_mark, parts[0].end_mark - parts[0].start_mark);
@@ -1281,6 +1598,9 @@ esp_err_t post_async_handler(httpd_req_t *req) {
                 };
             } else {
                 if (fp > 0) {
+#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 1
+                    printf("Close file being saved to %s\n", fname);
+#endif
                     close(fp);
                 } else
                     goto toerr;
@@ -1308,8 +1628,14 @@ esp_err_t post_async_handler(httpd_req_t *req) {
 
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
     if (strstr(req->uri, "/api/v1/files/delete") == req->uri) {
-        if(delete_files(req, fname, 64, &data) != 0) {
+        if(bulk_manage_files(req, fname, 64, &data, delete_file_cb, "delete") != 0) {
             ESP_LOGE(TAG, "[%s] delete failed.", __FUNCTION__);
+        }
+        goto done;
+    }
+    if (strstr(req->uri, "/api/v1/files/archive") == req->uri) {
+        if(bulk_manage_files(req, fname, 64, &data, archive_file_cb, "archive") != 0) {
+            ESP_LOGE(TAG, "[%s] archive failed.", __FUNCTION__);
         }
         goto done;
     }
@@ -1336,9 +1662,9 @@ esp_err_t post_async_handler(httpd_req_t *req) {
             }
         }
         strbf_t respsb;
-        if (config_save_var(m_context.config, data.start, 0, g_context_get_ubx_hw(&m_context)) > 0) {
+        if (config_save_var(m_context.config, data.start, 0) > 0) {
             strbf_init(&respsb);
-            config_get_json(m_context.config, &respsb, r, g_context_get_ubx_hw(&m_context));
+            config_get(m_context.config, r, &respsb, 1);
             http_send_json_msg(req, "Saved", 5, 0, respsb.start, respsb.cur - respsb.start);
             strbf_free(&respsb);
             goto done;
@@ -1457,3 +1783,5 @@ void stop_async_req_workers(void) {
         async_req_queue = NULL;
     }
 }
+
+#endif

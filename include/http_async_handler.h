@@ -1,11 +1,11 @@
 #ifndef HTTP_ASYNC_HANDLER_H
 #define HTTP_ASYNC_HANDLER_H
 
-#include <esp_http_server.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <esp_http_server.h>
 
 typedef int (*httpd_req_handler_t)(httpd_req_t *req);
 

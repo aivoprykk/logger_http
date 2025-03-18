@@ -1,6 +1,5 @@
-
-
-#include <esp_http_server.h>
+#include "logger_http_private.h"
+#if defined(CONFIG_LOGGER_HTTP_ENABLED)
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
@@ -8,9 +7,7 @@
 #include "sys/time.h"
 #include <unistd.h>
 
-#include "logger_http_private.h"
-
-#include "esp_log.h"
+#include "esp_event.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
@@ -22,14 +19,21 @@
 #include "uri_common.h"
 #include "context.h"
 #include "logger_config.h"
-#include "logger_wifi.h"
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
 #include "https_ota.h"
 #endif
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+#include "logger_wifi.h"
+#else
+struct m_wifi_context wifi_context = {.hostname = "esp32"};
+#endif
+#if defined(CONFIG_LOGGER_VFS_ENABLED)
+#include "vfs.h"
+#endif
+
 #define HTTP_QUERY_KEY_MAX_LEN (64)
 
 extern struct context_s m_context;
-extern struct m_wifi_context wifi_context;
 /* A simple example that demonstrates how to create GET and POST
  * handlers for the web server.
  */
@@ -38,7 +42,7 @@ static const char *TAG = "http_server";
 
 httpd_handle_t *server = 0;
 uint8_t downloading_file = 0;
-static char base_path[ESP_VFS_PATH_MAX + 1];
+char base_path[ESP_VFS_PATH_MAX + 1];
 
 struct m_handler {
     int fctl;
@@ -300,29 +304,32 @@ static esp_err_t initialise_mdns(void) {
     esp_err_t ret = mdns_init();
     if(ret) goto done;
     size_t len = 0;
+    char * hn = 0;
+    hn = wifi_context.hostname;
+
     if(m_context.config->hostname[0] != '\0') {
         len = strlen(m_context.config->hostname);
-        memcpy(&wifi_context.hostname[0], m_context.config->hostname, MIN(len, sizeof(wifi_context.hostname)));
+        memcpy(hn, m_context.config->hostname, MIN(len, 32));
     } else {
         len = strlen(CONFIG_MDNS_HOST_NAME);
-        memcpy(&wifi_context.hostname[0], CONFIG_MDNS_HOST_NAME, MIN(len, sizeof(wifi_context.hostname)));
+        memcpy(hn, CONFIG_MDNS_HOST_NAME, MIN(len, 32));
     }
 #if defined(CONFIG_WEB_SERVER_APPEND_MAC_TO_HOSTNAME)
-    if(!strcmp(&wifi_context.hostname[0],"esp-logger") && len<sizeof(wifi_context.hostname)) {
+    if(!strcmp(hn,"esp") && len<32) {
         wifi_context.hostname[len++] = '-';
         uint8_t mac[6];
         esp_read_mac(&mac[0], ESP_MAC_EFUSE_FACTORY);
         char mac_str[8]={0};
-        mac_to_char(mac, &wifi_context.hostname[len], 4);
+        mac_to_char(mac, hn+len, 4);
     }
 #endif
-    ret = mdns_hostname_set(&wifi_context.hostname[0]);
+    ret = mdns_hostname_set(hn);
     if(ret) goto done;
     ret = mdns_instance_name_set(MDNS_INSTANCE);
     if(ret) goto done;
 
     mdns_txt_item_t serviceTxtData[] = {{"board", "esp32"}, {"path", "/"}};
-    ret = mdns_service_add(&wifi_context.hostname[0], "_http", "_tcp", 80, serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0]));
+    ret = mdns_service_add(hn, "_http", "_tcp", 80, serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0]));
     done:
     if(ret)
         ESP_LOGE(TAG, "%s: %s", http_rest_server_errors[2], esp_err_to_name(ret));
@@ -390,7 +397,8 @@ void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, v
 }
 #endif  // !CONFIG_IDF_TARGET_LINUX
 
-const char * const http_server_events [] = {
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 2)
+static const char * const _http_server_events [] = {
     "HTTP_SERVER_EVENT_ERROR",
     "HTTP_SERVER_EVENT_START",
     "HTTP_SERVER_EVENT_ON_CONNECTED",
@@ -401,62 +409,71 @@ const char * const http_server_events [] = {
     "HTTP_SERVER_EVENT_DISCONNECTED",
     "HTTP_SERVER_EVENT_STOP"
 };
+const char * http_server_events(int id) {
+    return _http_server_events[id];
+}
+#else
+const char * http_server_events(int id) {
+    return "HTTP_SERVER_EVENT";
+}
+#endif
 
 static void esp_http_server_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
     if(base == ESP_HTTP_SERVER_EVENT) {
         esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
         switch(id) {
             case HTTP_SERVER_EVENT_ERROR: // 0
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_START: // 1
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_ON_CONNECTED: // 2
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
 #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
                 task_memory_info(__func__);
 #endif
                 break;
             case HTTP_SERVER_EVENT_ON_HEADER: // 3
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_HEADERS_SENT: // 4
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
                 break;
             // case HTTP_SERVER_EVENT_ON_DATA: // 5
-            //     ILOG(TAG, "[%s]  %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
+            //     ILOG(TAG, "[%s]  %d", __FUNCTION__, http_server_events(id), data ? data->data_len : 0);
             //     break;
             // case HTTP_SERVER_EVENT_SENT_DATA: // 6
-            //     ILOG(TAG, "[%s] %s %d", __FUNCTION__, http_server_events[id], data ? data->data_len : 0);
+            //     ILOG(TAG, "[%s] %s %d", __FUNCTION__, http_server_events(id), data ? data->data_len : 0);
             //     break;
             case HTTP_SERVER_EVENT_DISCONNECTED: // 7
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_STOP: // 8
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
                 break;
             default:
                 // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
+#if defined (CONFIG_LOGGER_WIFI_ENABLED)
     else if(base == WIFI_EVENT) {
         switch(id) {
             case WIFI_EVENT_AP_START:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
                 http_start_webserver();
                 break;
             case WIFI_EVENT_AP_STOP:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
                 if (!wifi_context.s_sta_connection)
                     http_stop_webserver();
                 break;
             case WIFI_EVENT_STA_START:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
                 break;
             case WIFI_EVENT_STA_STOP:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
                 if(m_context.config->fwupdate.update_enabled)
                     https_ota_stop();
@@ -469,7 +486,7 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
     else if(base == IP_EVENT) {
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
                 http_start_webserver();
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
                 if(m_context.config->fwupdate.update_enabled)
@@ -477,7 +494,7 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
 #endif
                 break;
             case IP_EVENT_STA_LOST_IP:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
                 if (!wifi_context.s_ap_connection)
                     http_stop_webserver();
     #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
@@ -489,6 +506,7 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 break;
         }
     }
+#endif
 }
 esp_err_t http_rest_init(const char *basepath) {
     ILOG(TAG, "[%s]", __func__);
@@ -499,33 +517,15 @@ esp_err_t http_rest_init(const char *basepath) {
     }
     ESP_ERROR_CHECK(esp_event_handler_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL));
     strbf_t buf;
-    strbf_inits(&buf, base_path, ESP_VFS_PATH_MAX);
+    strbf_inits(&buf, base_path, ESP_VFS_PATH_MAX+1);
     struct stat sb = {0};
     int statok, i = 0;
-    while(i < 3) {
-        strbf_reset(&buf);
-        if(i++ == 0) {
-            #if defined(CONFIG_USE_SPIFFS)
-            strbf_puts(&buf, CONFIG_SPIFFS_MOUNT_POINT);
-            #endif
-        }
-        else if (i++ == 1) {
-            #if defined(CONFIG_USE_FATFS)
-            strbf_puts(&buf, CONFIG_FATFS_MOUNT_POINT);
-            #endif
-        }
-        else {
-            strbf_puts(&buf, CONFIG_SD_MOUNT_POINT);
-        }
-        strbf_puts(&buf, basepath);
-        statok = stat(buf.start, &sb);
-        if(statok == 0) {
-            break;
-        }
-    }
+    strbf_put_path(&buf, vfs_ctx.parts[vfs_ctx.web_part].mount_point);
+    strbf_put_path(&buf, CONFIG_WEB_APP_PATH);
+
     strbf_finish(&buf);
-    //http_rest_init();
     ret = ESP_OK;
 done:
     return ret;
 }
+#endif

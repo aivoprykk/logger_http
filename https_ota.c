@@ -1,6 +1,7 @@
+#include "logger_http_private.h"
+#if defined(CONFIG_LOGGER_HTTP_ENABLED)
 #include "https_ota.h"
-
-#include "sdkconfig.h"
+#include "ota_events.h"
 
 #include <string.h>
 
@@ -9,10 +10,6 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
-#include "logger_http_private.h"
-
-#include "esp_event.h"
-#include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -27,13 +24,18 @@
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
 
-#include "logger_events.h"
-#include "logger_common.h"
 #include "context.h"
 #include "logger_config.h"
 #include "numstr.h"
 
+#ifndef CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
 #include "esp_tls.h"
+#endif
+
+ESP_EVENT_DEFINE_BASE(OTA_AUTO_EVENT);
+
+const char * const ota_auto_event_strings[] = { OTA_AUTO_EVENT_LIST(STRINGIFY) };
+
 
 #if !defined(CONFIG_OTA_USE_AUTO_UPDATE)
 void https_ota_start() {
@@ -195,7 +197,8 @@ static esp_err_t validate_image_header(esp_app_desc_t *new_app_info) {
     return ESP_OK;
 }
 
-const char * const http_client_events [] = {
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 2)
+static const char * const _http_client_events [] = {
     "HTTP_EVENT_ERROR",
     "HTTP_EVENT_ON_CONNECTED",
     "HTTP_EVENT_HEADER_SENT",
@@ -205,6 +208,14 @@ const char * const http_client_events [] = {
     "HTTP_EVENT_DISCONNECTED",
     "HTTP_EVENT_REDIRECT",
 };
+const char * http_client_events(int id) {
+    return _http_client_events[id];
+}
+#else
+const char * const http_client_events(int id) {
+    return "HTTP_EVENT";
+}
+#endif
 
 #define LOCAL_BUF_LEN 16
 // static char *output_buffer=0;  // Buffer to store response of http request from event handler
@@ -213,20 +224,20 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     int32_t id = evt->event_id;
     switch (id) {
         case HTTP_EVENT_ERROR:
-             ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
+             ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
              break;
         // case HTTP_EVENT_ON_CONNECTED:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
+        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
         //     break;
         // case HTTP_EVENT_HEADER_SENT:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
+        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
         //     break;
         // case HTTP_EVENT_ON_HEADER:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
+        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
         //     printf("%.*s", evt->data_len, (char *)evt->data);
         //     break;
         case HTTP_EVENT_ON_DATA:
-            ILOG(TAG, "[%s] %s, len=%d", __func__, http_client_events[id], evt->data_len);
+            ILOG(TAG, "[%s] %s, len=%d", __func__, http_client_events(id), evt->data_len);
             if (output_len == 0 && evt->user_data) {
                 // ILOG(TAG, "[%s] Resetting user_data buffer", __func__);
                 // we are just starting to copy the output data into the use
@@ -244,15 +255,15 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
             }
             break;
         case HTTP_EVENT_ON_FINISH:
-            ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
+            ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
             output_len = 0;
             break;
         case HTTP_EVENT_DISCONNECTED:
-            ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
+            ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
             output_len = 0;
             break;
         // case HTTP_EVENT_REDIRECT:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events[id]);
+        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
         //     break;
         default:
             break;
@@ -347,7 +358,7 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
             memcpy(ota_url+ota_url_len, project_name, sizeof(project_name)-1), ota_url_len += sizeof(project_name)-1;
             *(ota_url+ota_url_len++) = '-';
             memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;     
-#if defined(CONFIG_DISPLAY_DRIVER_SSD1681)
+#if defined(CONFIG_SSD168X_PANEL_SSD1681)
             memcpy(ota_url+ota_url_len, "-ssd1681", 8), ota_url_len += 8;
 #endif
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
@@ -427,7 +438,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
 
         m_context.firmware_update_started = 2;
         delay_ms(100);
-        ESP_ERROR_CHECK(esp_event_post(LOGGER_EVENT, LOGGER_EVENT_OTA_AUTO_UPDATE_START, NULL,0, portMAX_DELAY));
+        ESP_ERROR_CHECK(esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_START, NULL,0, portMAX_DELAY));
 
         wait_until = get_millis() + 60000;
         while(!m_context.fw_update_is_allowed) {
@@ -437,7 +448,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
                 goto ota_finish;
             }
         }
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 3)
         task_memory_info(__func__);
 #endif
 
@@ -482,10 +493,10 @@ static esp_err_t ota_get_task(void *pvParameter) {
             esp_https_ota_abort(https_ota_handle);
         xSemaphoreGive(xMutex);
         if(err||ota_finish_err) {
-            ESP_ERROR_CHECK(esp_event_post(LOGGER_EVENT, LOGGER_EVENT_OTA_AUTO_UPDATE_FAILED, NULL,0, portMAX_DELAY));
+            ESP_ERROR_CHECK(esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY));
         }
         else {
-            ESP_ERROR_CHECK(esp_event_post(LOGGER_EVENT, LOGGER_EVENT_OTA_AUTO_UPDATE_FINISH, NULL,0, portMAX_DELAY));
+            ESP_ERROR_CHECK(esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FINISH, NULL,0, portMAX_DELAY));
         }
     }
     return err;
@@ -506,7 +517,7 @@ void ota_task(void *pvParameter) {
             next_check = last_check + ((CONFIG_OTA_CHECK_INTERVAL)*1000llu);
         }
         delay_ms(10000);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
+#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 3)
         task_memory_info(__func__);
 #endif
     }
@@ -554,4 +565,5 @@ void https_ota_stop() {
     ota_task_started = 0;
 }
 
+#endif
 #endif

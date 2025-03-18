@@ -1,12 +1,12 @@
 #ifndef FAF0CA02_9A09_4F49_9416_D94AAE0BE223
 #define FAF0CA02_9A09_4F49_9416_D94AAE0BE223
 
-#include "esp_err.h"
-#include <stdint.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include "esp_err.h"
+#include <stdint.h>
 
 typedef void (*callback_t)(void);
 

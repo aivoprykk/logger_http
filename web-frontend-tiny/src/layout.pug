@@ -1,0 +1,22 @@
+html
+  head
+    title #{title}
+    link(href="index.scss" rel="stylesheet")
+    script(src="index.js" defer="defer")
+    meta(name="viewport" content="width=device-width, initial-scale=1")
+  body
+    header
+      nav
+        ul
+          li.brand
+            span.lg ESP-LOGGER
+        ul
+          li.home
+            a(class="secondary" href="/") Home
+          li.files
+            a(class="secondary" href="/files.html") Files 
+          li.config
+            a(class="secondary" href="/config.html") Config
+          li.fwupdate
+            a(class="secondary" href="/fwupdate.html") Update
+    block content

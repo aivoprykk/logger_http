@@ -1,0 +1,16 @@
+extends layout.pug
+
+block content
+  main  
+    .container
+      article.card.fwupdate
+        header.card-header
+          h2 Firmware update
+        .card-body.upload-file
+          label.upload-file-select
+            span.file-text Select firmware file
+            input(type="file")
+          button.outline.upload-submit Upload
+        footer.card-bottom
+            span Current firmware version: 
+            span.fwver-text #{espVersion}
