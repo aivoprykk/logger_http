@@ -2,7 +2,7 @@
     var baseuri = '';
     if (process.env.NODE_ENV === 'development') {
         // baseuri = 'http://esp-9c40.local';
-        baseuri = 'http://esp-logger.local';
+        baseuri = 'http://esp-9c40.local';
     }
     win.app = {
         curobj: null,
@@ -333,6 +333,7 @@
                 var txt = document.querySelector('.files .card-header .selection');
                 if (txt) {
                     txt.style.display = 'none';
+                    txt.removeAttribute('hidden');
                     txt.querySelector('.rm').addEventListener('click', function (e) {
                         var v = '';
                         self.selected.forEach(function (el, index) {
@@ -693,11 +694,7 @@
                                 win.app.snackbar.show(action + 'd');
                                 self.get();
                             };
-                            if (name.indexOf('|') < 0) {
-                                win.app.load(self.mkpath('/api/v1/files', name + '/' + action), 'json', callback.bind(self));
-                            } else {
-                                win.app.load('/api/v1/files/' + action, 'json', callback.bind(self), '{"name":"' + name + '"}');
-                            }
+                            win.app.load('/api/v1/files/' + action, 'json', callback.bind(self), '{"name":"' + name + '"}');
                             return false;
                         };
                     };

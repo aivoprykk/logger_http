@@ -36,7 +36,7 @@ module.exports = function (grunt) {
             png: {
                 expand: true,
                 cwd: '<%=srcDir%>/assets/',
-                src: 'logo.png',
+                src: 'logo.svg',
                 dest: '<%=publicDir%>/',
                 filter: 'isFile'
             },
@@ -158,11 +158,36 @@ module.exports = function (grunt) {
                     }
                 ]
             }
+        },
+        compress: {
+            release: {
+                options: {
+                    mode: 'gzip'
+                },
+                // Each of the files in the src/ folder will be output to
+                // the dist/ folder each with the extension .gz.js
+                files: [{
+                    expand: true,
+                    src: ['dist/index.js'],
+                    dest: '',
+                    ext: '.js.gz'
+                },{
+                    expand: true,
+                    src: ['dist/index.css'],
+                    dest: '',
+                    ext: '.css.gz'
+                },{
+                    expand: true,
+                    src: ['dist/logo.svg'],
+                    dest: '',
+                    ext: '.svg.gz'
+                }]
+            }
         }
     });
 
     grunt.registerTask('debug', ['clean', 'sass', 'concat:js', 'copy:png', 'pug:debug', 'replace:debug']);
-    grunt.registerTask('release', ['clean', 'sass', 'concat:js', 'copy:png', 'pug:release', 'uglify:release', 'cssmin:sitecss', 'replace:release']);
+    grunt.registerTask('release', ['clean', 'sass', 'concat:js', 'copy:png', 'pug:release', 'uglify:release', 'cssmin:sitecss', 'replace:release', 'compress:release']);
     grunt.registerTask('dist', ['release']);
     grunt.registerTask('default', ['dist']);
 };
