@@ -2,7 +2,7 @@
     var baseuri = '';
     if (process.env.NODE_ENV === 'development') {
         // baseuri = 'http://esp-9c40.local';
-        baseuri = 'http://esp-9c40.local';
+        baseuri = 'http://esp-e65c.local';
     }
     win.app = {
         curobj: null,
@@ -12,6 +12,7 @@
             window.app.files.init();
             window.app.config.init();
             window.app.home.init();
+            window.app.fileupload.init();
             console.log('Hello from ' + win.location.href);
             var el = document.createElement('dialog');
             el.innerHTML = '<article><h3>Confirm your action!</h3><p>Are you sure you want to delete the item?</p><footer><button class="secondary outline cancel" href="#cancel" role="button">Cancel</button><button class="outline ok" href="#confirm" role="button">Proceed</button><footer></article>';
@@ -93,12 +94,31 @@
         fileupload: {
             el: null,
             files: [],
-            upload: function (url, btn, callback) {
-                if (!btn) {
-                    console.log('Button object missing.');
-                    return;
+            changeevent: function (event) {
+                win.app.fileupload.fileselected(event);
+            },
+            init: function () {
+                var self = win.app.fileupload;
+                var obj = document.querySelector('main .upload-file');
+                var i; var j;
+                if (obj) {
+                    i = self.el = obj.querySelector('input[type=file]');
+                    j = obj.querySelector('.upload-submit');
                 }
-                var file = btn.parentNode.querySelector('input[type=file]'), size = 0;
+                if (i) {
+                    self.changel = i.addEventListener('change', self.changeevent, false);
+                }
+                if (j) {
+                    j.innerHTML = '';
+                    win.app.showsvg(j, 'M440-320v-326L336-542l-56-58 200-200 200 200-56 58-104-104v326h-80ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z', 'var(--pico-primary)', 24, 24);
+                    j.addEventListener('click', function (e) {
+                        win.app.curobj.upload(e);
+                    });
+                }
+            },
+            upload: function (url, callback) {
+                var self = win.app.fileupload;
+                var file = self.el, size = 0;
                 if (file && file.files && file.files.length > 0) {
                     var data = new FormData();
                     data.append('file', file.files[0]);
@@ -110,30 +130,29 @@
                         console.log('File input missing.');
                     return;
                 }
-                var b = file.parentNode.querySelector('button');
+                //var b = file.parentNode.querySelector('button');
                 var txt = file.parentNode.querySelector('.file-text');
                 var textupdate = function (msg) {
                     if (txt) {
                         txt.innerHTML = msg;
                     }
                 };
+                self.el.removeEventListener('change', self.changeevent, true);
                 var xhr = new XMLHttpRequest();
                 xhr.onreadystatechange = function () {
                     if (xhr.readyState == 4) {
                         if (xhr.status == 200) {
                             textupdate('Uploaded!');
                             win.app.snackbar.show('Success');
-                            win.app.fileupload.filedone('Upload file', false);
+                            self.filedone('Upload file', false);
                             if (callback) {
                                 callback(xhr.response);
                             }
                         }
                         else {
-                            textupdate('Error!');
+                            self.el.value = '';
                             win.app.snackbar.show('Upload failed.');
-                            if (b) {
-                                b.style.display = '';
-                            }
+                            self.filedone('Upload failed.', false);
                         }
                     }
                 };
@@ -151,16 +170,14 @@
                 xhr.open('post', baseuri + url, true);
                 xhr.timeout = 45000;
                 xhr.send(data);
-                if (b) {
-                    b.style.display = 'none';
-                }
             },
-            fileselected: function (event, file) {
+            fileselected: function (event) {
+                var self = win.app.fileupload, file =self.el;
                 if (file && file.files && file.files.length > 0) {
                     var obj = file.files[0];
                     var name = obj.name;
                     var fileName = name.split('\\|/');
-                    win.app.fileupload.filedone('Selected ' + fileName[fileName.length - 1] + ' (' + win.app.size(obj.size) + ')', true);
+                    self.filedone('Selected ' + fileName[fileName.length - 1] + ' (' + win.app.size(obj.size) + ')', true);
                     event.preventDefault();
                 }
             },
@@ -170,7 +187,8 @@
                     txt.innerHTML = msg;
                     txt = document.querySelector('.upload-file .upload-submit');
                     if (txt) {
-                        txt.style.display = display ? '' : 'none';
+                        if(display) txt.classList.remove('hide');
+                        else txt.classList.add('hide');
                     }
                 }
             }
@@ -222,21 +240,24 @@
                 self.el = document.querySelector('.fwupdate .fwver-text');
                 if (self.el) {
                     win.app.mkmenuactive('fwupdate');
+                    win.app.curobj = self;
                     self.cur = self;
                     self.get();
                 }
             },
-            upload: function (e, btn) {
+            upload: function (e) {
                 var self = win.app.fw;
                 var cb = function (resp) {
                     if (!resp) {
                         win.app.snackbar.show('Upload failed');
-                        return;
+                    } else {
+                        win.app.snackbar.show('Success');
+                        self.get();
                     }
-                    win.app.snackbar.show('Success');
-                    self.get();
                 };
-                win.app.fileupload.upload('/api/v1/fw/update', btn, cb);
+                console.log('Upload file /api/v1/fw/update');
+                win.app.fileupload.upload('/api/v1/fw/update', cb);
+                e.preventDefault();
             },
             render: function () {
                 var self = win.app.fw;
@@ -332,7 +353,6 @@
                 }
                 var txt = document.querySelector('.files .card-header .selection');
                 if (txt) {
-                    txt.style.display = 'none';
                     txt.removeAttribute('hidden');
                     txt.querySelector('.rm').addEventListener('click', function (e) {
                         var v = '';
@@ -342,7 +362,6 @@
                         });
                         self.sendcmd(v, 'delete');
                         self.selected = [];
-                        txt.style.display = 'none';
                         e.preventDefault();
                     });
                     txt.querySelector('.ar').addEventListener('click', function (e) {
@@ -353,7 +372,6 @@
                         });
                         self.sendcmd(v, 'archive');
                         self.selected = [];
-                        txt.style.display = 'none';
                         e.preventDefault();
                     });
                     txt.querySelector('.dl').addEventListener('click', function (e) {
@@ -364,24 +382,25 @@
                             a.click();
                         });
                         self.selected = [];
-                        txt.style.display = 'none';
                         e.preventDefault();
                     });
                 }
             },
-            upload: function (e, btn) {
+            upload: function (e) {
                 var self = win.app.files;
                 var cb = function (resp) {
                     if (!resp) {
                         win.app.snackbar.show('Upload failed');
                         console.log('Error on uploading file');
-                        return;
+                    } else {
+                        win.app.snackbar.show('Success');
+                        console.log('Uploaded file');
+                        self.get(self.path, true);
                     }
-                    win.app.snackbar.show('Success');
-                    console.log('Uploaded file');
-                    self.get();
                 };
-                win.app.fileupload.upload('/api/v1/files/' + self.path, btn, cb);
+                console.log('Upload file'+self.path);
+                win.app.fileupload.upload('/api/v1/files/' + self.path, cb);
+                e.preventDefault();
             },
             render: function () {
                 var self = win.app.files;
@@ -501,7 +520,8 @@
                         if (!x) self.selected = [];
                         var z = document.querySelector('.files .card-header .selection');
                         if (z) {
-                            z.style.display = self.selected.length ? '' : 'none';
+                            if(self.selected.length) z.classList.remove('hide');
+                            else z.classList.add('hide');
                         }
                     });
                     td.appendChild(a);
@@ -512,7 +532,9 @@
                         if (index > keys.length - 3) {
                             td.className = 'hide-xs';
                         }
-                        td.innerHTML = String(key).charAt(0).toUpperCase() + String(key).slice(1);
+                        td.innerHTML = String(key).charAt(0).toUpperCase() + String(key).slice(1)
+                            + '<span' + (key===self.sortby?' class="sort' + (self.sortorder===1?' up':'') : '')
+                            +'">&nbsp</spanclass=>';
                         td.addEventListener('click', function (key, a) {
                             return function (e) {
                                 a.sortby = key;
@@ -554,7 +576,8 @@
                                 }
                                 var z = document.querySelector('.files .card-header .selection');
                                 if (z) {
-                                    z.style.display = self.selected.length ? '' : 'none';
+                                    if(self.selected.length) z.classList.remove('hide');
+                                    else z.classList.add('hide');
                                 }
                             });
                             td.appendChild(a);
@@ -567,7 +590,7 @@
                             return function (e) {
                                 console.log('Download ' + n);
                                 if (file.type === 'f') {
-                                    e.target.href = baseuri + '/api/v1/files/' + self.path + '/' + n;
+                                    e.target.href = baseuri + '/' + self.path + '/' + n;
                                     return true;
                                 } else if (file.type === 'd') {
                                     self.get(n);
@@ -672,7 +695,7 @@
                         self.render();
                     }
                 };
-                if(plain) win.app.load('/api/v1/files'+name, 'json', callback.bind(self));
+                if(plain) win.app.load('/api/v1/files' + (name[0]!=='/'?'/':'') + name, 'json', callback.bind(self));
                 else win.app.load(self.mkpath('/api/v1/files', name), 'json', callback.bind(self));
             },
             sendcmd(name, action) {
@@ -692,8 +715,9 @@
                                 }
                                 console.log(action + ' file done');
                                 win.app.snackbar.show(action + 'd');
-                                self.get();
+                                self.get(self.path, true);
                             };
+                            if(name[0]!== '/' && name.indexOf('|')<0) name = self.mkpath('/', name);
                             win.app.load('/api/v1/files/' + action, 'json', callback.bind(self), '{"name":"' + name + '"}');
                             return false;
                         };
@@ -897,23 +921,4 @@
 document.addEventListener('DOMContentLoaded', function () {
     var self = window.app;
     self.init();
-    var i; var j;
-    var obj = document.querySelector('main .upload-file');
-    if (obj) {
-        i = obj.querySelector('input[type=file]');
-        j = obj.querySelector('.upload-submit');
-    }
-    if (i) {
-        i.addEventListener('change', function (event) {
-            self.fileupload.fileselected(event, i);
-        });
-    }
-    if (j) {
-        j.innerHTML = '';
-        j.style.display = 'none';
-        self.showsvg(j, 'M440-320v-326L336-542l-56-58 200-200 200 200-56 58-104-104v326h-80ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z', 'var(--pico-primary)', 24, 24);
-        j.addEventListener('click', function (e) {
-            self.curobj.upload(e, j);
-        });
-    }
 });

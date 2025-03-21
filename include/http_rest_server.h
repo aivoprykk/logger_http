@@ -24,9 +24,6 @@ extern "C" {
 
 #define SCRATCH_BUFSIZE (1024)
 
-#define CHECK_FILE_EXTENSION(filename, flen, ext, elen) \
-    (strcasecmp(filename + flen - elen, ext) == 0)
-
 /*
 From
 https://github.com/loboris/ESP32_spiffs_example/blob/master/main/testSpiffs.c
