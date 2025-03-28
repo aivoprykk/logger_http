@@ -42,7 +42,7 @@ static const char *TAG = "http_server";
 
 httpd_handle_t *server = 0;
 uint8_t downloading_file = 0;
-char base_path[ESP_VFS_PATH_MAX + 1] = {0};
+// char base_path[ESP_VFS_PATH_MAX + 1] = {0};
 
 struct m_handler {
     int fctl;
@@ -50,10 +50,10 @@ struct m_handler {
 };
 
 rest_server_context_t rest_server_context[] = {
-    {.base_path = &(base_path[0]), .request_no = 3},
-    {.base_path = &(base_path[0]), .request_no = 6},
-    {.base_path = &(base_path[0]), .request_no = 11},
-    {.base_path = &(base_path[0]), .request_no = 12}
+    {.request_no = 3},
+    {.request_no = 6},
+    {.request_no = 11},
+    {.request_no = 12}
 };
 
 static const char url_base[] = API_BASE"*";
@@ -99,7 +99,7 @@ httpd_handle_t start_webserver(void) {
     // Start the httpd server
     if (httpd_start(&server, &config) == ESP_OK) {
         // Set URI handlers
-        DLOG(TAG, "[%s] Registering URI handlers", __func__);
+        DLOG(TAG, "[%s] Registering URI handlers\n", __func__);
         const struct m_handler *handler;
         for (int i = 1, j = sizeof(handlers) / sizeof(struct m_handler); i < j; ++i) {
             handler = &handlers[i];
@@ -198,9 +198,6 @@ esp_err_t http_start_webserver() {
         server = start_webserver();
         initialise_mdns();
     }
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || defined(DEBUG))
-    task_memory_info(__func__);
-#endif
     if(server) return ESP_OK;
     else return ESP_FAIL;
 }
@@ -251,7 +248,7 @@ void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, v
 }
 #endif  // !CONFIG_IDF_TARGET_LINUX
 
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL < 2)
 static const char * const _http_server_events [] = {
     "HTTP_SERVER_EVENT_ERROR",
     "HTTP_SERVER_EVENT_START",
@@ -364,14 +361,14 @@ esp_err_t http_rest_init(const char *basepath) {
         goto done;
     }
     ESP_ERROR_CHECK(esp_event_handler_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL));
-    strbf_t buf;
-    strbf_inits(&buf, base_path, ESP_VFS_PATH_MAX+1);
+    //strbf_t buf;
+    //strbf_inits(&buf, base_path, ESP_VFS_PATH_MAX+1);
     struct stat sb = {0};
     int statok, i = 0;
-    strbf_put_path(&buf, vfs_ctx.parts[vfs_ctx.web_part].mount_point);
-    strbf_put_path(&buf, CONFIG_WEB_APP_PATH);
+    //strbf_put_path(&buf, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
+    //strbf_put_path(&buf, CONFIG_WEB_APP_PATH);
 
-    strbf_finish(&buf);
+    //strbf_finish(&buf);
     ret = ESP_OK;
 done:
     return ret;

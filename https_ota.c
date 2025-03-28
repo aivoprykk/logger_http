@@ -197,7 +197,7 @@ static esp_err_t validate_image_header(esp_app_desc_t *new_app_info) {
     return ESP_OK;
 }
 
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL < 2)
 static const char * const _http_client_events [] = {
     "HTTP_EVENT_ERROR",
     "HTTP_EVENT_ON_CONNECTED",
@@ -448,7 +448,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
                 goto ota_finish;
             }
         }
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL < 2 || defined(DEBUG))
         task_memory_info(__func__);
 #endif
 
@@ -461,10 +461,6 @@ static esp_err_t ota_get_task(void *pvParameter) {
             // user the ability to monitor the status of OTA upgrade by calling
             // esp_https_ota_get_image_len_read, which gives length of image data
             // read so far.
-    #if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 1)
-            // ILOG(TAG, "[%s] Image bytes read: %d", __func__, esp_https_ota_get_image_len_read(https_ota_handle));
-            // task_memory_info(__func__);
-    #endif
         }
 
         if (esp_https_ota_is_complete_data_received(https_ota_handle) != true) {
@@ -517,7 +513,7 @@ void ota_task(void *pvParameter) {
             next_check = last_check + ((CONFIG_OTA_CHECK_INTERVAL)*1000llu);
         }
         delay_ms(10000);
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL < 2 || defined(DEBUG))
         task_memory_info(__func__);
 #endif
     }

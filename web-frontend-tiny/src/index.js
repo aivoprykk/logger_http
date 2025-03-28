@@ -2,7 +2,7 @@
     var baseuri = '';
     if (process.env.NODE_ENV === 'development') {
         // baseuri = 'http://esp-9c40.local';
-        baseuri = 'http://esp-e65c.local';
+        baseuri = 'http://esp-21a8.local';
     }
     win.app = {
         curobj: null,
@@ -34,7 +34,7 @@
             var i, j;
             var a = document.querySelectorAll('header nav li');
             for (i = 0, j = a.length; i < j; i++) {
-                if(a[i].classList.contains(cl)) {
+                if (a[i].classList.contains(cl)) {
                     a[i].classList.add('active');
                 } else {
                     a[i].classList.remove('active');
@@ -67,16 +67,13 @@
             var xhr = new XMLHttpRequest(), d = '';
             xhr.responseType = type;
             xhr.onreadystatechange = () => {
-                if (xhr.readyState === 4) {
-                    callback(xhr.response);
-                }
+                if (xhr.readyState === 4)  callback(xhr.response);
             };
             xhr.open(data ? 'POST' : 'GET', baseuri + url, true);
             if (data && type === 'json') {
                 xhr.setRequestHeader('Content-Type', 'application/json');
-                if (data && typeof data === 'object') {
-                    d = JSON.stringify(data);
-                } else d = data;
+                if (data && typeof data === 'object') d = JSON.stringify(data);
+                else d = data;
             }
             xhr.send(d);
         },
@@ -122,7 +119,7 @@
                 if (file && file.files && file.files.length > 0) {
                     var data = new FormData();
                     data.append('file', file.files[0]);
-                    size  = file.files[0].size;
+                    size = file.files[0].size;
                 } else {
                     if (file)
                         console.log('Please select a file first.');
@@ -162,7 +159,7 @@
                             var percent = Math.ceil(e.loaded / size * 100);
                             textupdate('Uploading... ' + percent + '%');
                         }
-                        else if(e.loaded >= size) {
+                        else if (e.loaded >= size) {
                             textupdate('Uploading... 100%');
                         }
                     }
@@ -172,7 +169,7 @@
                 xhr.send(data);
             },
             fileselected: function (event) {
-                var self = win.app.fileupload, file =self.el;
+                var self = win.app.fileupload, file = self.el;
                 if (file && file.files && file.files.length > 0) {
                     var obj = file.files[0];
                     var name = obj.name;
@@ -187,7 +184,7 @@
                     txt.innerHTML = msg;
                     txt = document.querySelector('.upload-file .upload-submit');
                     if (txt) {
-                        if(display) txt.classList.remove('hide');
+                        if (display) txt.classList.remove('hide');
                         else txt.classList.add('hide');
                     }
                 }
@@ -297,7 +294,7 @@
                     win.app.mkmenuactive('home');
                     win.app.curobj = self;
                     var t = self.el.querySelector('.table-2');
-                    if(!t) self.get();
+                    if (!t) self.get();
                 }
             },
             render: function () {
@@ -398,7 +395,7 @@
                         self.get(self.path, true);
                     }
                 };
-                console.log('Upload file'+self.path);
+                console.log('Upload file' + self.path);
                 win.app.fileupload.upload('/api/v1/files/' + self.path, cb);
                 e.preventDefault();
             },
@@ -520,7 +517,7 @@
                         if (!x) self.selected = [];
                         var z = document.querySelector('.files .card-header .selection');
                         if (z) {
-                            if(self.selected.length) z.classList.remove('hide');
+                            if (self.selected.length) z.classList.remove('hide');
                             else z.classList.add('hide');
                         }
                     });
@@ -533,8 +530,8 @@
                             td.className = 'hide-xs';
                         }
                         td.innerHTML = String(key).charAt(0).toUpperCase() + String(key).slice(1)
-                            + '<span' + (key===self.sortby?' class="sort' + (self.sortorder===1?' up':'') : '')
-                            +'">&nbsp</spanclass=>';
+                            + '<span' + (key === self.sortby ? ' class="sort' + (self.sortorder === 1 ? ' up' : '') : '')
+                            + '">&nbsp</spanclass=>';
                         td.addEventListener('click', function (key, a) {
                             return function (e) {
                                 a.sortby = key;
@@ -576,7 +573,7 @@
                                 }
                                 var z = document.querySelector('.files .card-header .selection');
                                 if (z) {
-                                    if(self.selected.length) z.classList.remove('hide');
+                                    if (self.selected.length) z.classList.remove('hide');
                                     else z.classList.add('hide');
                                 }
                             });
@@ -695,7 +692,7 @@
                         self.render();
                     }
                 };
-                if(plain) win.app.load('/api/v1/files' + (name[0]!=='/'?'/':'') + name, 'json', callback.bind(self));
+                if (plain) win.app.load('/api/v1/files' + (name[0] !== '/' ? '/' : '') + name, 'json', callback.bind(self));
                 else win.app.load(self.mkpath('/api/v1/files', name), 'json', callback.bind(self));
             },
             sendcmd(name, action) {
@@ -717,7 +714,7 @@
                                 win.app.snackbar.show(action + 'd');
                                 self.get(self.path, true);
                             };
-                            if(name[0]!== '/' && name.indexOf('|')<0) name = self.mkpath('/', name);
+                            if (name[0] !== '/' && name.indexOf('|') < 0) name = self.mkpath('/', name);
                             win.app.load('/api/v1/files/' + action, 'json', callback.bind(self), '{"name":"' + name + '"}');
                             return false;
                         };
@@ -757,7 +754,7 @@
                 var callback = function (resp) {
                     if (!resp) {
                         console.log('Error on saving config');
-                        self.snackbar.show('Failed save');
+                        win.app.snackbar.show('Failed save');
                         return;
                     }
                     console.log('Saved config');
@@ -817,6 +814,16 @@
                     el = data[i];
                     if (!el || !el.name) continue;
                     tr = document.createElement('tr');
+                    if (el.depends) {
+                        tr.classList.add('depends');
+                        tr.dataset.depends = el.depends;
+                        var x = data.find(function (el) {
+                            return el.name === tr.dataset.depends;
+                        });
+                        if (x && x.value === 0) {
+                            tr.classList.add('hide');
+                        }
+                    }
                     td = document.createElement('td');
                     td.className = 'name';
                     td.innerHTML = String(el.name).charAt(0).toUpperCase() + String(el.name).slice(1);

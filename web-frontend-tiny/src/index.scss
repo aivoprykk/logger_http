@@ -271,6 +271,7 @@ input[type="file"] {
         width: 100%;
         border-collapse: collapse;
         th {
+          white-space: nowrap;
           .sort {
             background-image: var(--pico-icon-chevron);
             background-size: 1rem;
@@ -310,10 +311,13 @@ input[type="file"] {
             display: none;
           }
         }
-        @media (max-width: 468px) {
+        @media (max-width: 496px) {
           input {
             padding: 0;
             margin: 0;
+          }
+          th .sort {
+            margin-left: 0.2rem;
           }
         }
       }

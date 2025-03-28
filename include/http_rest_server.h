@@ -44,7 +44,7 @@ int fnmatch(const char *pattern, const char *string, int flags);
 //-----------------------------------------------------------------------
 
 typedef struct rest_server_context {
-    const char *base_path;
+    // const char *base_path;
     uint8_t request_no;
     uint16_t _pad0;  // pad to 4bytes
 } rest_server_context_t;
