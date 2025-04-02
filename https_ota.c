@@ -59,7 +59,7 @@ extern struct context_s m_context;
 #if defined(PROJECT_NAME)
 static const char project_name[] = PROJECT_NAME;
 #else
-static const char project_name[] = "esp-gps-logger";
+static const char project_name[] = "espidf-gps-logger";
 #endif
 
 const char * const http_ota_events [] = {
@@ -212,7 +212,7 @@ const char * http_client_events(int id) {
     return _http_client_events[id];
 }
 #else
-const char * const http_client_events(int id) {
+const char * http_client_events(int id) {
     return "HTTP_EVENT";
 }
 #endif
@@ -448,10 +448,6 @@ static esp_err_t ota_get_task(void *pvParameter) {
                 goto ota_finish;
             }
         }
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
-        task_memory_info(__func__);
-#endif
-
         while (1) {
             err = esp_https_ota_perform(https_ota_handle);
             if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
@@ -513,9 +509,6 @@ void ota_task(void *pvParameter) {
             next_check = last_check + ((CONFIG_OTA_CHECK_INTERVAL)*1000llu);
         }
         delay_ms(10000);
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
-        task_memory_info(__func__);
-#endif
     }
     esp_event_handler_unregister(ESP_HTTPS_OTA_EVENT, ESP_EVENT_ANY_ID, &event_handler);
     vTaskDelete(NULL);

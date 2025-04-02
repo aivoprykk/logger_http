@@ -272,7 +272,8 @@ const char * http_server_events(int id) {
 static void esp_http_server_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
     if(base == ESP_HTTP_SERVER_EVENT) {
         esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
-        switch(id) {
+ #if (C_LOG_LEVEL < 2)
+       switch(id) {
             case HTTP_SERVER_EVENT_ERROR: // 0
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
                 break;
@@ -289,10 +290,10 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_ON_DATA: // 5
-                ILOG(TAG, "[%s]  %s", __FUNCTION__, http_server_events(id));
+                DLOG(TAG, "%s", ".");
                 break;
             case HTTP_SERVER_EVENT_SENT_DATA: // 6
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
+                ILOG(TAG, "[%s] -", __FUNCTION__);
                 break;
             case HTTP_SERVER_EVENT_DISCONNECTED: // 7
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
@@ -304,21 +305,28 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
+#endif
     }
 #if defined (CONFIG_LOGGER_WIFI_ENABLED)
     else if(base == WIFI_EVENT) {
         switch(id) {
             case WIFI_EVENT_AP_START:
+#if (C_LOG_LEVEL < 2)
                 ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
+#endif
                 http_start_webserver();
                 break;
             case WIFI_EVENT_AP_STOP:
+#if (C_LOG_LEVEL < 2)
                 ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
+#endif
                 if (!wifi_context.s_sta_connection)
                     http_stop_webserver();
                 break;
             case WIFI_EVENT_STA_STOP:
+#if (C_LOG_LEVEL < 2)
                 ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
+#endif
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
                 if(m_context.config->fwupdate.update_enabled)
                     https_ota_stop();
@@ -331,7 +339,9 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
     else if(base == IP_EVENT) {
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
+#if (C_LOG_LEVEL < 2)
                 ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
+#endif
                 http_start_webserver();
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
                 if(m_context.config->fwupdate.update_enabled)
@@ -339,7 +349,9 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
 #endif
                 break;
             case IP_EVENT_STA_LOST_IP:
+#if (C_LOG_LEVEL < 2)
                 ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
+#endif
                 if (!wifi_context.s_ap_connection)
                     http_stop_webserver();
     #if defined(CONFIG_OTA_USE_AUTO_UPDATE)

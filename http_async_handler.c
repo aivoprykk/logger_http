@@ -124,7 +124,9 @@ const char *http_file_types[] = {FILE_TYPE_HANDLERS(STRINGIFY)};
 
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepath, size_t pathlen, char ** data) {
     assert(filepath);
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] uri:%s type:%s", __func__, req->uri, filepath);
+#endif
     int ret = ESP_OK;
     if(!pathlen) pathlen = strlen(filepath);
     const char * ext = filepath + pathlen - 1;
@@ -150,7 +152,9 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepa
             break;
         }
     }
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] done file: %s, type: %s", __FUNCTION__, filepath, *data);
+#endif
     if(**data)
         ret = httpd_resp_set_type(req, *data);
     done:
@@ -216,7 +220,9 @@ static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char
     if (strstr(filename, base) == filename)
         p += strlen(base);
     strbf_put_path(&sb, p);
+#if (C_LOG_LEVEL < 2)
     DLOG(TAG, "Move to arcive %s => %s\n", filename, sb.start);
+#endif
     ret = s_rename_file_n(filename, sb.start, 0);
 #endif
     done:
@@ -238,9 +244,12 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
         esp_err_t err = httpd_resp_set_hdr(req, "Content-Length", tmp);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
-        } else {
+        }
+#if (C_LOG_LEVEL < 2)
+        else {
             ILOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);    
         }
+#endif
     }
     size_t chunk_size = SCRATCH_BUFSIZE;
     char chunk[SCRATCH_BUFSIZE] = {0};
@@ -421,7 +430,7 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t
     if(wifi_context.s_sta_connection) {
         if(mode == 2) { 
             flush_d(req, http_async_handler_strings[8], data, flush_size);
-            flush_d(req, "Sta_sid", data, flush_size);
+            flush_d(req, "Sta_ssid", data, flush_size);
             flush_d(req, http_async_handler_strings[9], data, flush_size);
         } else flush_d(req, "\",\"sta_ssid\":\"", data, flush_size);
         if(wifi_context.s_sta_got_ip)
@@ -442,6 +451,12 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, "\",\"hostname\":\"", data, flush_size);
     flush_d(req, wifi_context.hostname, data, flush_size);
+    if(mode == 2) { 
+        flush_d(req, http_async_handler_strings[8], data, flush_size);
+        flush_d(req, "Total Heap", data, flush_size);
+        flush_d(req, http_async_handler_strings[9], data, flush_size);
+    } else flush_d(req, "\",\"totalheap\":", data, flush_size);
+    strbf_putl(data, heap_caps_get_total_size(MALLOC_CAP_8BIT));
     if(mode == 2) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Freeheap", data, flush_size);
@@ -681,7 +696,9 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
         strbf_shape(data, 0);
     }
     i += data->cur - data->start;
+#if (C_LOG_LEVEL < 2)
     DLOG(TAG, "[%s] Total %lu items, %llu bytes, %u bytes sent.\n", __FUNCTION__, nitems, total, i);
+#endif
     done:
     IMEAS_END(TAG, "[%s] %s done, took: %llu us", __func__, req->uri);
 #if (C_LOG_LEVEL < 2 || defined(DEBUG))
@@ -989,7 +1006,9 @@ int8_t try_file_path(httpd_req_t *req, strbf_t *pathbuf, const char * p) {
     }
     while(pathbuf->cur && *pathbuf->cur) ++pathbuf->cur;
     *pathbuf->cur = 0;
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] filepath:%s p:%s r:%s len:%d", __FUNCTION__, pathbuf->start, p, r, r-p);
+#endif
     statok = stat(pathbuf->start, &sb);
     if (!statok) {
         if (!ret) {
@@ -1069,7 +1088,9 @@ esp_err_t api_handler(httpd_req_t * req) {
                 strbf_puts(&buf, p);
                 strbf_puts(&buf, "\",\"result\":\"");
                 if (err < 8) {
+#if (C_LOG_LEVEL < 2)
                     DLOG(TAG, "Going to %s file: %s, uri: %s\n", p, pathbuf.start, req->uri);
+#endif
                     if (ret == 2)
                         err = archive_file(req, pathbuf.start, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
                     else
@@ -1131,7 +1152,9 @@ esp_err_t get_handler(httpd_req_t *req) {
     add_cors(req, 0);
     p = req->uri + ulen - 1;
     while (p > req->uri && *p != '.' && *p != '/') --p;
+#if (C_LOG_LEVEL < 2)
     DLOG(TAG, "uri part p:%s\n", p);
+#endif
     if(ulen == 1)
         set_content_type_from_file(req, ".html", 5, &c);
     else 
@@ -1155,7 +1178,9 @@ esp_err_t get_handler(httpd_req_t *req) {
             else httpd_resp_set_status(req, HTTPD_500);
             goto finishing;
         }
-        DLOG(TAG, "Going to open file: %s, uri: %s\n", &filepath[0], req->uri);
+#if (C_LOG_LEVEL < 2)
+       DLOG(TAG, "Going to open file: %s, uri: %s\n", &filepath[0], req->uri);
+#endif
         fd = open(&(filepath[0]), O_RDONLY, 0);
         if (fd) {
             // set_content_type_from_file(req, pathbuf.start, pathbuf.cur - pathbuf.start);
@@ -1258,7 +1283,7 @@ static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, s
                 fbuf.cur += e - p;
             }
             *fbuf.cur = 0;
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL < 2)
             DLOG(TAG, "%s file: %s\n", action_name, fbuf.start);
 #endif
             if (!cb || cb(req, strbf_finish(&fbuf))) {
@@ -1291,7 +1316,8 @@ esp_err_t post_handler(httpd_req_t *req) {
     char fname[64]={0};
     int fp = -1;
     bool mpart_open = false;
-    uint8_t u_mode = strstr(req->uri, "/fw/update") == req->uri ? 1 : 0;
+    uint8_t api = (strstr(req->uri, API_BASE) == req->uri) ? 1 : 0;
+    uint8_t u_mode = strstr(req->uri, "/fw/update") >= req->uri ? 1 : 0;
     httpd_req_get_hdr_value_str(req, "Content-Type", buf, buflen);
     httpd_resp_set_hdr(req, "Connection", "close");
     mpb = strstr(buf, "multipart");
@@ -1308,7 +1334,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             boundarylen = MIN(80, mpb0 - mpb);
             memcpy(boundary, mpb, boundarylen);
             boundary[boundarylen] = 0;
-#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 2
+#if (C_LOG_LEVEL < 1)
             DLOG(TAG, "boundary found '%s' size '%" PRIu16 "'\n", boundary, boundarylen);
 #endif
         }
@@ -1353,7 +1379,9 @@ esp_err_t post_handler(httpd_req_t *req) {
                 parts[mpart_num].end_mark = 0;
             }
             if (recieved < buflen && recieved >= total_len) {
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] all data recieved bl:%" PRIu16 " rc:%d tl:%d\n", __FUNCTION__, buflen, recieved, total_len);
+#endif
                 *(buf + recieved) = 0;
             }
             mpb = mpb0 = buf;
@@ -1369,7 +1397,9 @@ esp_err_t post_handler(httpd_req_t *req) {
                     memcpy(fname, mpb0, fnamelen);
                     fname[fnamelen] = 0;
                 }
+#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] found multipart file begin, fname: '%s' len: '%d'", __FUNCTION__, fname, fnamelen);
+#endif
                 parts[mpart_num].end_mark = (buf + recieved);
                 // printf("[%s] start mpb(001): '%s' \n", __FUNCTION__, mpb);
                 while (mpb && mpb < parts[mpart_num].end_mark && !(is_crln_safe(mpb) && is_crln_safe(mpb + 2))) {
@@ -1465,7 +1495,9 @@ esp_err_t post_handler(httpd_req_t *req) {
                 break;
             }
         } else {
+#if (C_LOG_LEVEL < 2)
             DLOG(TAG, "[%s] got buffered data '%s'\n", __FUNCTION__, buf);
+#endif
             if(l+recieved >= buflen) {
                 ELOG(TAG, "[%s] Buffer overflow.", __func__);
                 goto toerr;
@@ -1474,7 +1506,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             
         }
         l += recieved;
-#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 1
+#if (C_LOG_LEVEL < 2)
         DLOG(TAG, "[%s] recieved: %d, total: %d, l: %lu\n", __FUNCTION__, recieved, total_len, l);
 #endif
         total_len -= recieved;
@@ -1488,9 +1520,10 @@ esp_err_t post_handler(httpd_req_t *req) {
                 ESP_LOGE(TAG, "Failed to finish ota.");
                 ota_deinit();
             };
+            ILOG(TAG, "Ota finished%s", ".");
         } else {
             if (fp > 0) {
-#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 1
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] Close file being saved to %s\n", __func__, fname);
 #endif
                 close(fp);
@@ -1498,7 +1531,9 @@ esp_err_t post_handler(httpd_req_t *req) {
                 goto toerr;
         }
     }
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "Post request saved %lu bytes.", l);
+#endif
     if (!is_multipart) {
         if (!data.start || data.cur == data.start) {
             goto toerr;
@@ -1509,7 +1544,6 @@ esp_err_t post_handler(httpd_req_t *req) {
     /* rest_server_context_t *rest_context = (rest_server_context_t *)req->user_ctx;
     assert(rest_context); */
 
-    uint8_t api = (strstr(req->uri, API_BASE) == req->uri) ? 1 : 0;
     add_cors(req, api);
     if (api) {
         set_content_type_from_file(req, ".json", 5, &c);

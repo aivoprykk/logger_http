@@ -34,6 +34,7 @@ static struct
 extern struct context_s m_context;
 
 esp_err_t ota_deinit() {
+    ESP_LOGI(TAG, "[%s]", __func__);
     // Remove timeout timer
     esp_err_t result = ESP_OK;
     if (timeout_timer != NULL) {
@@ -78,6 +79,7 @@ static void timer_b_cb() {
 }
 
 esp_err_t ota_start() {
+    ILOG(TAG, "[%s]", __func__);
     // Don't attempt to re-init an ongoing OTA
     if (ota.state != ota_state_Idle)
         return ESP_ERR_INVALID_STATE;
@@ -120,7 +122,6 @@ esp_err_t ota_start() {
 }
 
 esp_err_t ota_write(uint8_t* data, uint16_t length) {
-    
     // Check for non-initialized or error state
     if (ota.state != ota_state_InProgress)
         return ESP_ERR_INVALID_STATE;
@@ -140,12 +141,14 @@ esp_err_t ota_write(uint8_t* data, uint16_t length) {
 }
 
 static void cb_when_done() {
+    ESP_LOGI(TAG, "[%s]", __func__);
     ota.state = ota_state_Reboot;
     m_context.request_restart = 1;
     //esp_restart();
 }
 
 esp_err_t ota_end(struct end_result_s * result) {
+    ILOG(TAG, "[%s]", __func__);
     // Construct result object
     result->callback = 0;
 
