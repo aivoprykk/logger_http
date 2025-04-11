@@ -38,6 +38,9 @@
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
 #include "vfs.h"
 #endif
+#if defined(CONFIG_UBLOX_ENABLED)
+#include "ubx.h"
+#endif
 
 #define ASYNC_WORKER_TASK_PRIORITY 5
 #define ASYNC_WORKER_TASK_STACK_SIZE 1024 * 3
@@ -381,11 +384,16 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t
     size_t llen = 0;
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
+    if(mode == 2) {
+        flush_d(req, "<table class=\"table-2\"><tr><td>", data, flush_size);
+    } else {
+        flush_d(req, "{", data, flush_size);
+    }
     if(mode == 2) { 
-        flush_d(req, "<table class=\"table-2\"><tr><td>IDF version", data, flush_size);
+        flush_d(req, "Hostname", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
-    } else flush_d(req, "{\"version\":\"", data, flush_size);
-    flush_d(req, IDF_VER, data, flush_size);
+    } else flush_d(req, "\"hostname\":\"", data, flush_size);
+    flush_d(req, wifi_context.hostname, data, flush_size);
     if(mode == 2) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Cores", data, flush_size);
@@ -405,63 +413,28 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, "\",\"revision\":", data, flush_size);
     strbf_putl(data, chip_info.revision);
-    if(mode == 2) { 
+#if defined(CONFIG_UBLOX_ENABLED)
+    if(mode == 2) {
         flush_d(req, http_async_handler_strings[8], data, flush_size);
-        flush_d(req, "Fwversion", data, flush_size);
+        flush_d(req, "GPS", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
-    } else flush_d(req, ",\"fwversion\":\"", data, flush_size);
-    flush_d(req, m_context.SW_version, data, flush_size);
-    #if defined(CONFIG_LOGGER_WIFI_ENABLED)
-    if(wifi_context.s_ap_connection) {
-        if(mode == 2) { 
-            flush_d(req, http_async_handler_strings[8], data, flush_size);
-            flush_d(req, "Ap_ssid", data, flush_size);
-            flush_d(req, http_async_handler_strings[9], data, flush_size);
-        } else flush_d(req, "\",\"ap_ssid\":\"", data, flush_size);
-        flush_d(req, wifi_context.ap.ssid, data, flush_size);
-        if(mode == 2) { 
-            flush_d(req, http_async_handler_strings[8], data, flush_size);
-            flush_d(req, "Ap_address", data, flush_size);
-            flush_d(req, http_async_handler_strings[9], data, flush_size);
-        } else flush_d(req, "\",\"ap_address\":\"", data, flush_size);
-        llen = uint8_array_to_ipv4_string(wifi_context.ap.ipv4_address, &lbuf[0]);
-        flush_d(req, lbuf, data, flush_size);
+    } else flush_d(req, ",\"gps\":\"", data, flush_size);
+    flush_d(req, ubx_chip_str(m_context.gps.ubx_device), data, flush_size);
+    if(mode != 2) {
+        flush_d(req, "\"", data, flush_size);
     }
-    if(wifi_context.s_sta_connection) {
-        if(mode == 2) { 
-            flush_d(req, http_async_handler_strings[8], data, flush_size);
-            flush_d(req, "Sta_ssid", data, flush_size);
-            flush_d(req, http_async_handler_strings[9], data, flush_size);
-        } else flush_d(req, "\",\"sta_ssid\":\"", data, flush_size);
-        if(wifi_context.s_sta_got_ip)
-         flush_d(req, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, data, flush_size);
-        if(mode == 2) { 
-            flush_d(req, http_async_handler_strings[8], data, flush_size);
-            flush_d(req, "Sta_address", data, flush_size);
-            flush_d(req, http_async_handler_strings[9], data, flush_size);
-        } else flush_d(req, "\",\"sta_address\":\"", data, flush_size);
-        if(wifi_context.s_sta_got_ip)
-            llen = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &lbuf[0]);
-        flush_d(req, lbuf, data, flush_size);
-    }
-    #endif
-    if(mode == 2) { 
-        flush_d(req, http_async_handler_strings[8], data, flush_size);
-        flush_d(req, "Hostname", data, flush_size);
-        flush_d(req, http_async_handler_strings[9], data, flush_size);
-    } else flush_d(req, "\",\"hostname\":\"", data, flush_size);
-    flush_d(req, wifi_context.hostname, data, flush_size);
+#endif
     if(mode == 2) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Total Heap", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
-    } else flush_d(req, "\",\"totalheap\":", data, flush_size);
+    } else flush_d(req, ",\"totalheap\":", data, flush_size);
     strbf_putl(data, heap_caps_get_total_size(MALLOC_CAP_8BIT));
     if(mode == 2) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Freeheap", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
-    } else flush_d(req, "\",\"freeheap\":", data, flush_size);
+    } else flush_d(req, ",\"freeheap\":", data, flush_size);
     strbf_putl(data, esp_get_free_heap_size());
     if(mode == 2) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
@@ -482,6 +455,61 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t
     } else {
         strbf_putc(data, '0');
     }
+    if(mode == 2) { 
+        flush_d(req, http_async_handler_strings[8], data, flush_size);
+        flush_d(req, "IDF version", data, flush_size);
+        flush_d(req, http_async_handler_strings[9], data, flush_size);
+    } else flush_d(req, ",\"version\":\"", data, flush_size);
+    flush_d(req, IDF_VER, data, flush_size);
+    if(mode == 2) { 
+        flush_d(req, http_async_handler_strings[8], data, flush_size);
+        flush_d(req, "Fwversion", data, flush_size);
+        flush_d(req, http_async_handler_strings[9], data, flush_size);
+    } else flush_d(req, "\",\"fwversion\":\"", data, flush_size);
+    flush_d(req, m_context.SW_version, data, flush_size);
+    if(mode != 2) {
+        flush_d(req, "\"", data, flush_size);
+    }
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+    if(wifi_context.s_ap_connection) {
+        if(mode == 2) { 
+            flush_d(req, http_async_handler_strings[8], data, flush_size);
+            flush_d(req, "Ap_ssid", data, flush_size);
+            flush_d(req, http_async_handler_strings[9], data, flush_size);
+        } else flush_d(req, ",\"ap_ssid\":\"", data, flush_size);
+        flush_d(req, wifi_context.ap.ssid, data, flush_size);
+        if(mode == 2) { 
+            flush_d(req, http_async_handler_strings[8], data, flush_size);
+            flush_d(req, "Ap_address", data, flush_size);
+            flush_d(req, http_async_handler_strings[9], data, flush_size);
+        } else flush_d(req, "\",\"ap_address\":\"", data, flush_size);
+        llen = uint8_array_to_ipv4_string(wifi_context.ap.ipv4_address, &lbuf[0]);
+        flush_d(req, lbuf, data, flush_size);
+        if(mode != 2) {
+            flush_d(req, "\"", data, flush_size);
+        } 
+    }
+    if(wifi_context.s_sta_connection) {
+        if(mode == 2) { 
+            flush_d(req, http_async_handler_strings[8], data, flush_size);
+            flush_d(req, "Sta_ssid", data, flush_size);
+            flush_d(req, http_async_handler_strings[9], data, flush_size);
+        } else flush_d(req, ",\"sta_ssid\":\"", data, flush_size);
+        if(wifi_context.s_sta_got_ip)
+         flush_d(req, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, data, flush_size);
+        if(mode == 2) { 
+            flush_d(req, http_async_handler_strings[8], data, flush_size);
+            flush_d(req, "Sta_address", data, flush_size);
+            flush_d(req, http_async_handler_strings[9], data, flush_size);
+        } else flush_d(req, "\",\"sta_address\":\"", data, flush_size);
+        if(wifi_context.s_sta_got_ip)
+            llen = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &lbuf[0]);
+        flush_d(req, lbuf, data, flush_size);
+        if(mode != 2) {
+            flush_d(req, "\"", data, flush_size);
+        } 
+    }
+#endif
     if(mode == 2) { 
         flush_d(req, "</td></tr></table>", data, flush_size);
     } else 
