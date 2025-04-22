@@ -372,7 +372,11 @@ esp_err_t http_rest_init(const char *basepath) {
         ret = ESP_FAIL;
         goto done;
     }
-    ESP_ERROR_CHECK(esp_event_handler_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL));
+    if(esp_event_handler_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL)) {
+        ESP_LOGE(TAG, "[%s] Failed to register event handler", __func__);
+        ret = ESP_FAIL;
+        goto done;
+    }
     //strbf_t buf;
     //strbf_inits(&buf, base_path, ESP_VFS_PATH_MAX+1);
     struct stat sb = {0};

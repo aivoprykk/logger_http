@@ -438,7 +438,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
 
         m_context.firmware_update_started = 2;
         delay_ms(100);
-        ESP_ERROR_CHECK(esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_START, NULL,0, portMAX_DELAY));
+        esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_START, NULL,0, portMAX_DELAY);
 
         wait_until = get_millis() + 60000;
         while(!m_context.fw_update_is_allowed) {
@@ -485,10 +485,10 @@ static esp_err_t ota_get_task(void *pvParameter) {
             esp_https_ota_abort(https_ota_handle);
         xSemaphoreGive(xMutex);
         if(err||ota_finish_err) {
-            ESP_ERROR_CHECK(esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY));
+            esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY);
         }
         else {
-            ESP_ERROR_CHECK(esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FINISH, NULL,0, portMAX_DELAY));
+            esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FINISH, NULL,0, portMAX_DELAY);
         }
     }
     return err;
