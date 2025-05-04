@@ -306,7 +306,7 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
     version_url_len += (m_context.config->fwupdate.channel == FW_UPDATE_CHANNEL_DEV) ? 9 : 7;
     version_url[version_url_len] = 0;
     config.url = &version_url[0];
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL < 3)
     printf("URL: %s %u\n", config.url, version_url_len);
 #endif
     config.event_handler = _http_event_handler;
@@ -323,7 +323,7 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
                 break;
             }
         }
-#if (CONFIG_LOGGER_HTTP_LOG_LEVEL < 1)
+#if (C_LOG_LEVEL < 1)
         ILOG(TAG, "HTTP GET Status = %d, content_length = %"PRId64" resp = %s",
                 esp_http_client_get_status_code(client),
                 esp_http_client_get_content_length(client), local_response_buffer);
