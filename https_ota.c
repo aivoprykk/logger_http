@@ -360,8 +360,9 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
             memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;     
 #if defined(CONFIG_SSD168X_PANEL_SSD1681)
             memcpy(ota_url+ota_url_len, "-ssd1681", 8), ota_url_len += 8;
-#endif
-#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+#elif defined(CONFIG_SSD168X_SCREEN_GDEY0213B74)
+            memcpy(ota_url+ota_url_len, "-gdey0213b74", 12), ota_url_len += 12;
+#elif defined(CONFIG_DISPLAY_DRIVER_ST7789)
             memcpy(ota_url+ota_url_len, "-st7789", 7), ota_url_len += 7;
 #endif
             memcpy(ota_url+ota_url_len, ".bin", 4), ota_url_len += 4;
@@ -483,7 +484,8 @@ static esp_err_t ota_get_task(void *pvParameter) {
         m_context.firmware_update_started = 0;
         if(https_ota_handle)
             esp_https_ota_abort(https_ota_handle);
-        xSemaphoreGive(xMutex);
+        if(xMutex)
+            xSemaphoreGive(xMutex);
         if(err||ota_finish_err) {
             esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY);
         }

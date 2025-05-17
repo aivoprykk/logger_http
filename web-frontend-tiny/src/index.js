@@ -1,8 +1,7 @@
 (function (win) {
     var baseuri = '';
     if (process.env.NODE_ENV === 'development') {
-        // baseuri = 'http://esp-9c40.local';
-        baseuri = 'http://esp-21a8.local';
+        baseuri = 'http://esp21fc.local';
     }
     win.app = {
         curobj: null,
@@ -846,12 +845,19 @@
                             }
                             input.dataset.pos = el.toggles[k].pos;
                             input.dataset.name = el.name;
-                            input.addEventListener('click', function (obj) {
+                            input.dataset.raw = el.value;
+                            input.addEventListener('click', function () {
                                 return function (e) {
-                                    var i = obj;
                                     var x = e.target;
+                                    var i, m = 0;
                                     var w = x.dataset.value == 1 ? 0x01 : 0x00;
                                     var v = parseFloat(x.dataset.pos);
+                                    for (; m < self.data.length; ++m) {
+                                        if (x.dataset.name === self.data[m].name) {
+                                            i = self.data[m].value;
+                                            break;
+                                        }
+                                    }
                                     if (w === 1) {
                                         (i &= ~(1 << v)); // clear bit
                                         x.dataset.value = 0;
@@ -861,10 +867,10 @@
                                         x.dataset.value = 1;
                                         x.className = '';
                                     }
-                                    console.log('Change ' + x.dataset.name + ' from ' + obj + ' to ' + i);
+                                    console.log('Change ' + x.dataset.name + ' from ' + self.data[m].value + ' to ' + i);
                                     self.save(x.dataset.name, i);
                                 };
-                            }(el.value));
+                            }());
                             td.appendChild(input);
                         }
                     }

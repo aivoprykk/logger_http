@@ -162,11 +162,12 @@ static esp_err_t initialise_mdns(void) {
     }
 #if defined(CONFIG_WEB_SERVER_APPEND_MAC_TO_HOSTNAME)
     if(!strcmp(hn,"esp") && len<32) {
-        wifi_context.hostname[len++] = '-';
+        //wifi_context.hostname[len++] = '-';
         uint8_t mac[6];
         esp_read_mac(&mac[0], ESP_MAC_EFUSE_FACTORY);
         char mac_str[8]={0};
         mac_to_char(mac, hn+len, 4);
+        str_tolower(hn+len);
     }
 #endif
     ret = mdns_hostname_set(hn);

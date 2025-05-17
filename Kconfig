@@ -49,7 +49,7 @@ menu "Logger HTTP Module Configuration"
     config OTA_AUTO_UPDATE_TASK_STACK_SIZE
             int "OTA Task stack size in bytes"
             depends on OTA_USE_AUTO_UPDATE
-            default 3584
+            default 3840
             help
                 OTA task stack size in bytes
     config OTA_API_SERVER_URL
