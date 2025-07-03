@@ -126,7 +126,7 @@ const char *http_file_extensions[] = {FILE_EXTENSIONS(STRINGIFY)};
 const char *http_file_types[] = {FILE_TYPE_HANDLERS(STRINGIFY)};                     
 
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepath, size_t pathlen, char ** data) {
-    assert(filepath);
+    if(!filepath) return ESP_FAIL;
 #if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] uri:%s type:%s", __func__, req->uri, filepath);
 #endif
@@ -1001,7 +1001,7 @@ esp_err_t head_handler(httpd_req_t *req) {
 int8_t try_file_path(httpd_req_t *req, strbf_t *pathbuf, const char * p) {
     char strbuf[SCRATCH_BUFSIZE] = {0};
     rest_server_context_t *rest_context = (rest_server_context_t *)req->user_ctx;
-    assert(rest_context);
+    if(!rest_context) return -1;
     size_t ulen = strlen(req->uri), tlen = p-req->uri;
     struct stat sb = {0};
     int statok = 0, i, j;
@@ -1164,7 +1164,7 @@ esp_err_t get_handler(httpd_req_t *req) {
     char filepath[VFS_FILE_PATH_MAX] = {0};
     //char strbuf[SCRATCH_BUFSIZE] = {0};
     rest_server_context_t *rest_context = (rest_server_context_t *)req->user_ctx;
-    assert(rest_context);
+    if(!rest_context) return ESP_ERR_INVALID_ARG;
     // int resp = (int)rest_context->request_no;
     //  char *resp_str = 0;
     strbf_t buf;
@@ -1269,7 +1269,7 @@ static esp_err_t archive_file_cb(httpd_req_t *req, const char *fname) {
 }
 
 static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data, manage_file_cb_t cb, const char * action_name) {
-    assert(data);
+    if(!data) return ESP_ERR_INVALID_ARG;
     ILOG(TAG, "[%s] %s %s", __func__, data->start, action_name ? action_name : "null");
     char * p = 0, *r = 0, *e = 0;
     esp_err_t ret = ESP_OK;

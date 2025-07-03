@@ -352,7 +352,7 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
 #endif
             memcpy(ota_url+ota_url_len, "://", 3), ota_url_len += 3;
             memcpy(ota_url+ota_url_len, OTA_URI_BASE, sizeof(OTA_URI_BASE)-1), ota_url_len += sizeof(OTA_URI_BASE)-1;
-            assert((ota_url_len + (2*len) + 16 + 8 + 8) < ota_url_size);
+            if((ota_url_len + (2*len) + 16 + 8 + 8) >= ota_url_size) return ESP_ERR_NO_MEM;
             memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;
             *(ota_url+ota_url_len++) = '/';
             memcpy(ota_url+ota_url_len, project_name, sizeof(project_name)-1), ota_url_len += sizeof(project_name)-1;
