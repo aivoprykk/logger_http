@@ -99,7 +99,7 @@ httpd_handle_t start_webserver(void) {
     // Start the httpd server
     if (httpd_start(&server, &config) == ESP_OK) {
         // Set URI handlers
-        DLOG(TAG, "[%s] Registering URI handlers\n", __func__);
+        DLOG(TAG, "[%s] Registering URI handlers", __func__);
         const struct m_handler *handler;
         for (int i = 1, j = sizeof(handlers) / sizeof(struct m_handler); i < j; ++i) {
             handler = &handlers[i];

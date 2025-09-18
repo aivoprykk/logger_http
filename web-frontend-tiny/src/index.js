@@ -1,7 +1,7 @@
 (function (win) {
     var baseuri = '';
     if (process.env.NODE_ENV === 'development') {
-        baseuri = 'http://esp21fc.local';
+        baseuri = 'http://10.10.10.1';
     }
     win.app = {
         curobj: null,
@@ -137,6 +137,9 @@
                 var xhr = new XMLHttpRequest();
                 xhr.onreadystatechange = function () {
                     if (xhr.readyState == 4) {
+                        if (self.el) {
+                            self.el.value = '';
+                        }
                         if (xhr.status == 200) {
                             textupdate('Uploaded!');
                             win.app.snackbar.show('Success');
@@ -146,7 +149,6 @@
                             }
                         }
                         else {
-                            self.el.value = '';
                             win.app.snackbar.show('Upload failed.');
                             self.filedone('Upload failed.', false);
                         }

@@ -14,6 +14,7 @@
 #include "http_async_handler.h"
 #include "http_rest_server.h"
 #include "logger_config.h"
+#include "logger_buffer_pool.h"  // Add centralized buffer pool
 #include "context.h"
 #if defined(CONFIG_USE_OTA)
 #include "ota.h"
@@ -22,6 +23,9 @@
 #include "strbf.h"
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
 #include "vfs.h"
+#endif
+#ifdef CONFIG_USE_FATFS
+#include "vfs_fat_spiflash.h"
 #endif
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
 #include "adc.h"
@@ -123,15 +127,46 @@ static esp_err_t submit_async_req(httpd_req_t *req, httpd_req_handler_t handler)
 #endif
 
 const char *http_file_extensions[] = {FILE_EXTENSIONS(STRINGIFY)};
-const char *http_file_types[] = {FILE_TYPE_HANDLERS(STRINGIFY)};                     
+const char *http_file_types[] = {FILE_TYPE_HANDLERS(STRINGIFY)};
+
+/**
+ * Get buffer for HTTP operations using centralized buffer pool
+ */
+static esp_err_t get_http_buffer(logger_buffer_usage_t usage_type, 
+                                logger_buffer_size_t size_type,
+                                logger_buffer_handle_t *handle) {
+    if (!logger_buffer_pool_is_initialized()) {
+        ESP_LOGE(TAG, "Buffer pool not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    return logger_buffer_pool_alloc(size_type, usage_type, handle, 100);
+}
+
+/**
+ * Release HTTP buffer back to centralized pool
+ */
+static void release_http_buffer(logger_buffer_handle_t *handle) {
+    if (handle && handle->buffer) {
+        logger_buffer_pool_free(handle);
+    }
+}                     
 
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepath, size_t pathlen, char ** data) {
-    if(!filepath) return ESP_FAIL;
+    if(!filepath || !data) return ESP_FAIL;
+    
 #if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] uri:%s type:%s", __func__, req->uri, filepath);
 #endif
     int ret = ESP_OK;
     if(!pathlen) pathlen = strlen(filepath);
+    
+    // Bounds checking
+    if (pathlen == 0 || pathlen > VFS_FILE_PATH_MAX) {
+        ESP_LOGE(TAG, "Invalid filepath length: %zu", pathlen);
+        return ESP_FAIL;
+    }
+    
     const char * ext = filepath + pathlen - 1;
     while (ext > filepath && *ext != '.') ext--;
     if (*ext != '.') {ret = ESP_FAIL; goto done;}
@@ -185,7 +220,7 @@ static const char *http_async_handler_strings[] = {
 };
 
 static esp_err_t http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, int status, char * data, int data_size) {
-    DLOG(TAG, "[%s] %s\n", __func__, msg);
+    DLOG(TAG, "[%s] %s", __func__, msg);
     httpd_resp_send_chunk(req, "{\"status\":\"", 11); // status
     if(status==0)
         httpd_resp_send_chunk(req, http_async_handler_status_strings[0], 2);
@@ -224,7 +259,7 @@ static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char
         p += strlen(base);
     strbf_put_path(&sb, p);
 #if (C_LOG_LEVEL < 2)
-    DLOG(TAG, "Move to arcive %s => %s\n", filename, sb.start);
+    DLOG(TAG, "Move to arcive %s => %s", filename, sb.start);
 #endif
     ret = s_rename_file_n(filename, sb.start, 0);
 #endif
@@ -237,10 +272,22 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
     IMEAS_START();
     int ret = 0;
     int32_t read_bytes, i = len;
+    char *chunk = NULL;
+    logger_buffer_handle_t buffer_handle = {0};
+    
     if (fd <= 0 || !req) {
         ret = ESP_FAIL;
         goto done;
     }
+    
+    // Get buffer for file transfer operations
+    if (get_http_buffer(LOGGER_BUFFER_USAGE_HTTP_SCRATCH, LOGGER_BUFFER_LARGE, &buffer_handle) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get scratch buffer");
+        ret = ESP_FAIL;
+        goto done;
+    }
+    chunk = (char*)buffer_handle.buffer;
+    
     char tmp[8] = {0};
     if (len) {
         xultoa(len, &(tmp[0]));
@@ -255,7 +302,6 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
 #endif
     }
     size_t chunk_size = SCRATCH_BUFSIZE;
-    char chunk[SCRATCH_BUFSIZE] = {0};
     do {
         read_bytes = read(fd, chunk, chunk_size-1);
 #if (C_LOG_LEVEL < 1)
@@ -279,6 +325,8 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
     DLOG(TAG, "%s", "\n");
 #endif
     done:
+    // Release buffer back to pool
+    release_http_buffer(&buffer_handle);
     IMEAS_END(TAG, "[%s] sent %lu bytes took: %llu us", __func__, len - i);
     return ret;
 }
@@ -725,7 +773,7 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     }
     i += data->cur - data->start;
 #if (C_LOG_LEVEL < 2)
-    DLOG(TAG, "[%s] Total %lu items, %llu bytes, %u bytes sent.\n", __FUNCTION__, nitems, total, i);
+    DLOG(TAG, "[%s] Total %lu items, %llu bytes, %u bytes sent.", __FUNCTION__, nitems, total, i);
 #endif
     done:
     IMEAS_END(TAG, "[%s] %s done, took: %llu us", __func__, req->uri);
@@ -866,7 +914,7 @@ static esp_err_t index_get_handler(httpd_req_t * req, char *path) {
         data = malloc(sb.st_size + hl);
         int read_bytes = read(fd, data, sb.st_size);
         *(data + sb.st_size) = 0;
-        DLOG(TAG, "send index 0 : %s, %d, %s, %d\n", data, read_bytes, hostname, hl);
+        DLOG(TAG, "send index 0 : %s, %d, %s, %d", data, read_bytes, hostname, hl);
         if (close(fd)) {
             ESP_LOGE(TAG, "Failed to close (%s)", strerror(errno));
         }
@@ -897,7 +945,7 @@ static esp_err_t index_get_handler(httpd_req_t * req, char *path) {
             xultoa(bl, &(tmp[0]));
             httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
             httpd_resp_set_hdr(req, "Content-Length", tmp);
-            DLOG(TAG, "send index 1 : %s, %d\n", data, bl);
+            DLOG(TAG, "send index 1 : %s, %d", data, bl);
             httpd_resp_send_chunk(req, data, bl);
         } else {
             ESP_LOGE(TAG, "send index failed.");
@@ -1101,7 +1149,15 @@ esp_err_t api_handler(httpd_req_t * req) {
         }
     } else if (strstr(uri, "files") == uri) {
         uri += 5;    
-        char filepath[VFS_FILE_PATH_MAX] = {0};
+        char *filepath;
+        logger_buffer_handle_t path_handle = {0};
+        if (get_http_buffer(LOGGER_BUFFER_USAGE_HTTP_PATH, LOGGER_BUFFER_SMALL, &path_handle) != ESP_OK) {
+            msg = "buffer allocation failed";
+            msglen = 24;
+            goto err;
+        }
+        filepath = (char*)path_handle.buffer;
+        
         strbf_t pathbuf;
         strbf_inits(&pathbuf, filepath, VFS_FILE_PATH_MAX);
         int err = try_file_path(req, &pathbuf, uri);
@@ -1117,7 +1173,7 @@ esp_err_t api_handler(httpd_req_t * req) {
                 strbf_puts(&buf, "\",\"result\":\"");
                 if (err < 8) {
 #if (C_LOG_LEVEL < 2)
-                    DLOG(TAG, "Going to %s file: %s, uri: %s\n", p, pathbuf.start, req->uri);
+                    DLOG(TAG, "Going to %s file: %s, uri: %s", p, pathbuf.start, req->uri);
 #endif
                     if (ret == 2)
                         err = archive_file(req, pathbuf.start, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
@@ -1142,6 +1198,7 @@ esp_err_t api_handler(httpd_req_t * req) {
             default:
                 break;
         }
+        release_http_buffer(&path_handle); // Release shared buffer
     }
     else {
         err:
@@ -1154,6 +1211,51 @@ esp_err_t api_handler(httpd_req_t * req) {
 #if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
+    return ret;
+}
+
+static esp_err_t system_format_handler(httpd_req_t *req, strbf_t * data) {
+    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    esp_err_t ret = ESP_OK;
+    // Parse mountpoint from URI
+    const char *uri = req->uri;
+    const char *mpb = strstr(uri, "/api/v1/path/format/");
+    if (!mpb) {
+        httpd_resp_set_status(req, HTTPD_400);
+        http_send_json_msg(req, "Invalid URI", 11, 0, 0, 0);
+        return ESP_FAIL;
+    }
+    mpb += 19; // after "/api/v1/path/format", points "/mountpoint"
+    int len = mpb ? strlen(mpb) : 0;
+    if (len == 0 || len >= 64) {
+        httpd_resp_set_status(req, HTTPD_400);
+        http_send_json_msg(req, len == 0 ? "Missing mountpoint" : "Mountpoint too long", len == 0 ? 17 : 19, 0, 0, 0);
+        return ESP_FAIL;
+    }
+
+    if (!data || !data->start || data->cur <= data->start) {
+        httpd_resp_set_status(req, HTTPD_400);
+        http_send_json_msg(req, "No data received", 16, 0, 0, 0);
+        return ESP_FAIL;
+    }
+    // Simple check for {"format":true}
+    if (strstr(data->start, "\"format\":true") != NULL) {
+#ifdef CONFIG_USE_FATFS
+            ret = fatfs_format(mpb);
+            if (ret == ESP_OK) {
+                http_send_json_msg(req, "Format successful", 17, 0, 0, 0);
+            } else {
+                httpd_resp_set_status(req, HTTPD_500);
+                http_send_json_msg(req, "Format failed", 13, 0, 0, 0);
+            }
+#else
+            httpd_resp_set_status(req, HTTPD_501);
+            http_send_json_msg(req, "FATFS not enabled", 18, 0, 0, 0);
+#endif
+    } else {
+        httpd_resp_set_status(req, HTTPD_400);
+        http_send_json_msg(req, "Invalid JSON", 12, 0, 0, 0);
+    }
     return ret;
 }
 
@@ -1181,7 +1283,7 @@ esp_err_t get_handler(httpd_req_t *req) {
     p = req->uri + ulen - 1;
     while (p > req->uri && *p != '.' && *p != '/') --p;
 #if (C_LOG_LEVEL < 2)
-    DLOG(TAG, "uri part p:%s\n", p);
+    DLOG(TAG, "uri part p:%s", p);
 #endif
     if(ulen == 1)
         set_content_type_from_file(req, ".html", 5, &c);
@@ -1207,7 +1309,7 @@ esp_err_t get_handler(httpd_req_t *req) {
             goto finishing;
         }
 #if (C_LOG_LEVEL < 2)
-       DLOG(TAG, "Going to open file: %s, uri: %s\n", &filepath[0], req->uri);
+       DLOG(TAG, "Going to open file: %s, uri: %s", &filepath[0], req->uri);
 #endif
         fd = open(&(filepath[0]), O_RDONLY, 0);
         if (fd) {
@@ -1291,7 +1393,7 @@ static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, s
         }
         else p = data->start;
 #if (C_LOG_LEVEL < 1)
-        DLOG(TAG, "data: %s\n", p);
+        DLOG(TAG, "data: %s", p);
 #endif
         while(p && (!e || p<e)) {
             if(fbuf.cur-fbuf.start>len) strbf_shape(&fbuf, len);
@@ -1312,7 +1414,7 @@ static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, s
             }
             *fbuf.cur = 0;
 #if (C_LOG_LEVEL < 2)
-            DLOG(TAG, "%s file: %s\n", action_name, fbuf.start);
+            DLOG(TAG, "%s file: %s", action_name, fbuf.start);
 #endif
             if (!cb || cb(req, strbf_finish(&fbuf))) {
                 ret =http_send_json_msg(req, "Failed", 6, 3, 0, 0);
@@ -1363,7 +1465,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             memcpy(boundary, mpb, boundarylen);
             boundary[boundarylen] = 0;
 #if (C_LOG_LEVEL < 1)
-            DLOG(TAG, "boundary found '%s' size '%" PRIu16 "'\n", boundary, boundarylen);
+            DLOG(TAG, "boundary found '%s' size '%" PRIu16 "'", boundary, boundarylen);
 #endif
         }
     }
@@ -1408,7 +1510,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             }
             if (recieved < buflen && recieved >= total_len) {
 #if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] all data recieved bl:%" PRIu16 " rc:%d tl:%d\n", __FUNCTION__, buflen, recieved, total_len);
+                DLOG(TAG, "[%s] all data recieved bl:%" PRIu16 " rc:%d tl:%d", __FUNCTION__, buflen, recieved, total_len);
 #endif
                 *(buf + recieved) = 0;
             }
@@ -1509,7 +1611,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                         strbf_put_path(&pbuf, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
                     }
 #if CONFIG_LOGGER_HTTP_LOG_LEVEL < 2
-                    DLOG(TAG, "[%s] open path: %s name: %s\n", __func__, pbuf.start, fname);
+                    DLOG(TAG, "[%s] open path: %s name: %s", __func__, pbuf.start, fname);
 #endif
                     fp = s_open(fname, pbuf.start, "w+");
                 }
@@ -1524,7 +1626,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             }
         } else {
 #if (C_LOG_LEVEL < 2)
-            DLOG(TAG, "[%s] got buffered data '%s'\n", __FUNCTION__, buf);
+            DLOG(TAG, "[%s] got buffered data '%s'", __FUNCTION__, buf);
 #endif
             if(l+recieved >= buflen) {
                 ELOG(TAG, "[%s] Buffer overflow.", __func__);
@@ -1535,7 +1637,7 @@ esp_err_t post_handler(httpd_req_t *req) {
         }
         l += recieved;
 #if (C_LOG_LEVEL < 2)
-        DLOG(TAG, "[%s] recieved: %d, total: %d, l: %lu\n", __FUNCTION__, recieved, total_len, l);
+        DLOG(TAG, "[%s] recieved: %d, total: %d, l: %lu", __FUNCTION__, recieved, total_len, l);
 #endif
         total_len -= recieved;
         memcpy(prev, buf + recieved - 11, 11);
@@ -1552,7 +1654,7 @@ esp_err_t post_handler(httpd_req_t *req) {
         } else {
             if (fp > 0) {
 #if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] Close file being saved to %s\n", __func__, fname);
+                DLOG(TAG, "[%s] Close file being saved to %s", __func__, fname);
 #endif
                 close(fp);
             } else
@@ -1577,6 +1679,10 @@ esp_err_t post_handler(httpd_req_t *req) {
         set_content_type_from_file(req, ".json", 5, &c);
         tlen = 8;
         mpb = req->uri + tlen;
+        if (strstr(mpb, "path/format/") == mpb) {
+            system_format_handler(req, &data);
+            goto done;
+        }
         if (strstr(mpb, "files/delete") == mpb) {
             if(bulk_manage_files(req, fname, 64, &data, delete_file_cb, "delete") != 0) {
                 ESP_LOGE(TAG, "[%s] delete failed.", __FUNCTION__);
@@ -1680,6 +1786,15 @@ static void async_req_worker_task(void *p) {
 
 void start_async_req_workers(void) {
     ILOG(TAG, "[%s]", __func__);
+    
+    // Initialize centralized buffer pool if not already done
+    if (!logger_buffer_pool_is_initialized()) {
+        if (logger_buffer_pool_init() != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize centralized buffer pool");
+            return;
+        }
+    }
+    
     // counting semaphore keeps track of available workers
     worker_ready_count = xSemaphoreCreateCounting(worker_num,  // Max Count
                                                   0);          // Initial Count
@@ -1725,6 +1840,9 @@ void stop_async_req_workers(void) {
         vQueueDelete(async_req_queue);
         async_req_queue = NULL;
     }
+    
+    // Note: Centralized buffer pool cleanup is handled by logger_buffer_pool_deinit()
+    // which should be called during system shutdown
 }
 #endif
 #endif
