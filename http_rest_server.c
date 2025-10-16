@@ -154,14 +154,14 @@ static esp_err_t initialise_mdns(void) {
     hn = wifi_context.hostname;
 
     if(m_context.config->hostname[0] != '\0') {
-        len = strlen(m_context.config->hostname);
-        memcpy(hn, m_context.config->hostname, MIN(len, 32));
+        len = MIN(strlen(m_context.config->hostname), 32);
+        memcpy(hn, m_context.config->hostname, len);
     } else {
-        len = strlen(CONFIG_MDNS_HOST_NAME);
-        memcpy(hn, CONFIG_MDNS_HOST_NAME, MIN(len, 32));
+        len = MIN(strlen(CONFIG_MDNS_HOST_NAME), 32);
+        memcpy(hn, CONFIG_MDNS_HOST_NAME, len);
     }
 #if defined(CONFIG_WEB_SERVER_APPEND_MAC_TO_HOSTNAME)
-    if(!strcmp(hn,"esp") && len<32) {
+    if(!strcmp(hn,"esp")) {
         //wifi_context.hostname[len++] = '-';
         uint8_t mac[6];
         esp_read_mac(&mac[0], ESP_MAC_EFUSE_FACTORY);

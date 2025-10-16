@@ -104,17 +104,17 @@ menu "Logger HTTP Module Configuration"
         help
             Specify how important log should be added.
         config LOGGER_HTTP_LOG_LEVEL_TRACE
-            bool "A lot of logs to give detailed information"
+            bool "TRACE: A lot of logs to give detailed information"
         config LOGGER_HTTP_LOG_LEVEL_INFO
-            bool "Log important events"
+            bool "INFO: Log important events"
         config LOGGER_HTTP_LOG_LEVEL_WARN
-            bool "Log if something unwanted happened but didn't cause a problem"
+            bool "WARN: Log if something unwanted happened but didn't cause a problem"
         config LOGGER_HTTP_LOG_LEVEL_ERROR
-            bool "Only critical issues, when the system may fail"
+            bool "ERROR: Only critical issues, when the system may fail"
         config LOGGER_HTTP_LOG_LEVEL_USER
-            bool "Only logs added by the user"
+            bool "USER: Only logs added by the user"
         config LOGGER_HTTP_LOG_LEVEL_NONE
-            bool "Do not log anything"
+            bool "NONE: Do not log anything"
     endchoice
     config LOGGER_HTTP_LOG_LEVEL
         int

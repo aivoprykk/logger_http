@@ -54,7 +54,6 @@
 static const char *TAG = "asynchandler";
 
 extern struct context_s m_context;
-extern struct context_rtc_s m_context_rtc;
 extern char base_path[ESP_VFS_PATH_MAX + 1];
 
 // Async reqeusts are queued here while they wait to
@@ -327,7 +326,7 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
     done:
     // Release buffer back to pool
     release_http_buffer(&buffer_handle);
-    IMEAS_END(TAG, "[%s] sent %lu bytes took: %llu us", __func__, len - i);
+    IMEAS_END_ARGS(TAG, " sent %lu bytes", len - i);
     return ret;
 }
 
@@ -381,7 +380,7 @@ static esp_err_t config_handler(httpd_req_t *req, const char *name, strbf_t * sb
         httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
     }    
 done:
-    IMEAS_END(TAG, "[%s] %s took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s", req->uri);
     if(ret) {
         httpd_resp_set_status(req, HTTPD_500);
         http_send_json_msg(req, "fail", 4, 1, 0, 0);
@@ -395,12 +394,8 @@ static esp_err_t system_bat_get_handler(httpd_req_t * req) {
     char buf[16] = {0};
     size_t len = 0;
     httpd_resp_send_chunk(req, "{\"battery\":\"", 12);
-#ifdef USE_CUSTOM_CALIBRATION_VAL
-    len = f3_to_char(volt_read(m_context_rtc.RTC_calibration_bat), buf);
-#else
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
     len = f3_to_char(volt_read(), buf);
-#endif
 #endif
     if(len) {
         httpd_resp_send_chunk(req, buf, len);
@@ -417,7 +412,7 @@ static int uint8_array_to_ipv4_string(uint8_t *ipv4, char *buf) {
 }
 
 static void flush_d(httpd_req_t *req, const char * str, strbf_t * data, size_t flush_size) {
-    size_t len = strlen(str);
+    size_t len = str ? strlen(str) : 0;
     if(len + data->cur - data->start > flush_size) {
         httpd_resp_send_chunk(req, data->start, data->cur - data->start);
         strbf_shape(data, 0);
@@ -425,72 +420,159 @@ static void flush_d(httpd_req_t *req, const char * str, strbf_t * data, size_t f
     strbf_put(data, str, len);
 }
 
+typedef enum {
+    DATA_MODE_TXT = 0,
+    DATA_MODE_JSON = 1,
+    DATA_MODE_HTML = 2
+} data_mode_t;
+
+static uint64_t calc_size(uint64_t size, strbf_t * data, data_mode_t mode) {
+    if(mode == DATA_MODE_HTML) {
+        uint8_t pow = 0;
+        while(size > 1024) {
+            size /= 1024;
+            pow++;
+        }
+        strbf_putul(data, size);
+        strbf_putc(data, "BKMGT"[pow]);
+    }
+    else strbf_putul(data, size);
+    return size;
+}
+
+static esp_err_t paths_handler(httpd_req_t *req, data_mode_t mode, strbf_t * data, size_t flush_size) {
+    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    // IMEAS_START();
+    DIR *dirp = NULL;
+    const struct dirent *ent;
+    char type;
+    char size[16] = {0};
+    char tpath[VFS_FILE_PATH_MAX];
+    char tbuffer[92] ={0};
+    uint8_t i = 0;
+    if(mode == DATA_MODE_JSON)
+        httpd_resp_send_chunk(req, "{\"paths\": [", 11);
+    while(i < VFS_MAX_PARTS) {
+        if(vfs_ctx.parts[i].is_mounted) {
+            if(i > 0) {
+                if(mode == DATA_MODE_JSON)
+                    strbf_putc(data, ',');
+                else if(mode != DATA_MODE_HTML)
+                    strbf_putc(data, '\n');
+            }
+            if(mode == DATA_MODE_JSON)
+                flush_d(req, "{\"path\":\"", data, flush_size);
+            else {
+                if(mode == DATA_MODE_HTML)
+                    flush_d(req, http_async_handler_strings[8], data, flush_size);
+                flush_d(req, "Storage", data, flush_size);
+                if(mode == DATA_MODE_HTML)
+                    flush_d(req, http_async_handler_strings[9], data, flush_size);
+                else
+                    flush_d(req, ": ", data, flush_size);
+            }
+            flush_d(req, vfs_ctx.parts[i].mount_point + ((mode == DATA_MODE_HTML && *(vfs_ctx.parts[i].mount_point) == '/') ? 1 : 0), data, flush_size);
+            if(mode == DATA_MODE_JSON) {
+                strbf_putc(data, '"');
+                flush_d(req, http_async_handler_strings[6], data, flush_size);
+            }
+            else if(mode == DATA_MODE_HTML)
+                flush_d(req, ": ", data, flush_size);
+            else
+                flush_d(req, ", Total bytes: ", data, flush_size);
+            calc_size(vfs_ctx.parts[i].total_bytes, data, mode);
+            if(mode == DATA_MODE_JSON)
+                flush_d(req, http_async_handler_strings[7], data, flush_size);
+            else if(mode == DATA_MODE_HTML)
+                flush_d(req, " / ", data, flush_size);
+            else
+                flush_d(req, ", Free bytes: ", data, flush_size);
+            calc_size(vfs_ctx.parts[i].free_bytes, data, mode);
+            if(mode == DATA_MODE_JSON)
+                strbf_putc(data, '}');
+        }
+        i++;
+    }
+    if(mode == DATA_MODE_JSON)
+        flush_d(req, "]}\r\n", data, flush_size);
+    if(data->cur - data->start > 0) {
+        httpd_resp_send_chunk(req, data->start, data->cur - data->start);
+        strbf_shape(data, 0);
+    }
+    // IMEAS_END_ARGS(TAG, " %s done", req->uri);
+#if (C_LOG_LEVEL < 2)
+    task_memory_info(__func__);
+#endif
+    return ESP_OK;
+}
+
 /* Simple handler for getting system handler */
-static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t *data, size_t flush_size) {
+static esp_err_t system_info_get_handler(httpd_req_t *req, data_mode_t mode, strbf_t *data, size_t flush_size) {
     ILOG(TAG, "[%s]", __func__);
     char lbuf[16] = {0};
     size_t llen = 0;
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
-    if(mode == 2) {
+    if(mode == DATA_MODE_HTML) {
         flush_d(req, "<table class=\"table-2\"><tr><td>", data, flush_size);
     } else {
         flush_d(req, "{", data, flush_size);
     }
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, "Hostname", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, "\"hostname\":\"", data, flush_size);
     flush_d(req, wifi_context.hostname, data, flush_size);
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Cores", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, "\",\"cores\":", data, flush_size);
     strbf_putl(data,chip_info.cores);
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Model", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"model\":\"", data, flush_size);
     flush_d(req, "esp32", data, flush_size);
     if(chip_info.model != 1) flush_d(req, "s3", data, flush_size);
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Revision", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, "\",\"revision\":", data, flush_size);
     strbf_putl(data, chip_info.revision);
 #if defined(CONFIG_UBLOX_ENABLED)
-    if(mode == 2) {
+    if(mode == DATA_MODE_HTML) {
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "GPS", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"gps\":\"", data, flush_size);
     flush_d(req, ubx_chip_str(m_context.gps.ubx_device), data, flush_size);
-    if(mode != 2) {
+    if(mode != DATA_MODE_HTML) {
         flush_d(req, "\"", data, flush_size);
     }
 #endif
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Total Heap", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"totalheap\":", data, flush_size);
     strbf_putl(data, heap_caps_get_total_size(MALLOC_CAP_8BIT));
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Freeheap", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"freeheap\":", data, flush_size);
     strbf_putl(data, esp_get_free_heap_size());
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Minfreeheap", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"minfreeheap\":", data, flush_size);
     strbf_putl(data, esp_get_minimum_free_heap_size());
-    if(mode == 2) { 
+    paths_handler(req, mode, data, flush_size);
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Battery", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
@@ -503,49 +585,49 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t
     } else {
         strbf_putc(data, '0');
     }
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "IDF version", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"version\":\"", data, flush_size);
     flush_d(req, IDF_VER, data, flush_size);
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
         flush_d(req, "Fwversion", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, "\",\"fwversion\":\"", data, flush_size);
-    flush_d(req, m_context.SW_version, data, flush_size);
-    if(mode != 2) {
+    flush_d(req, PROJECT_VER_EXT, data, flush_size);
+    if(mode != DATA_MODE_HTML) {
         flush_d(req, "\"", data, flush_size);
     }
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
     if(wifi_context.s_ap_connection) {
-        if(mode == 2) { 
+        if(mode == DATA_MODE_HTML) { 
             flush_d(req, http_async_handler_strings[8], data, flush_size);
             flush_d(req, "Ap_ssid", data, flush_size);
             flush_d(req, http_async_handler_strings[9], data, flush_size);
         } else flush_d(req, ",\"ap_ssid\":\"", data, flush_size);
         flush_d(req, wifi_context.ap.ssid, data, flush_size);
-        if(mode == 2) { 
+        if(mode == DATA_MODE_HTML) { 
             flush_d(req, http_async_handler_strings[8], data, flush_size);
             flush_d(req, "Ap_address", data, flush_size);
             flush_d(req, http_async_handler_strings[9], data, flush_size);
         } else flush_d(req, "\",\"ap_address\":\"", data, flush_size);
         llen = uint8_array_to_ipv4_string(wifi_context.ap.ipv4_address, &lbuf[0]);
         flush_d(req, lbuf, data, flush_size);
-        if(mode != 2) {
+        if(mode != DATA_MODE_HTML) {
             flush_d(req, "\"", data, flush_size);
         } 
     }
     if(wifi_context.s_sta_connection) {
-        if(mode == 2) { 
+        if(mode == DATA_MODE_HTML) { 
             flush_d(req, http_async_handler_strings[8], data, flush_size);
             flush_d(req, "Sta_ssid", data, flush_size);
             flush_d(req, http_async_handler_strings[9], data, flush_size);
         } else flush_d(req, ",\"sta_ssid\":\"", data, flush_size);
         if(wifi_context.s_sta_got_ip)
          flush_d(req, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, data, flush_size);
-        if(mode == 2) { 
+        if(mode == DATA_MODE_HTML) { 
             flush_d(req, http_async_handler_strings[8], data, flush_size);
             flush_d(req, "Sta_address", data, flush_size);
             flush_d(req, http_async_handler_strings[9], data, flush_size);
@@ -553,12 +635,12 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t
         if(wifi_context.s_sta_got_ip)
             llen = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &lbuf[0]);
         flush_d(req, lbuf, data, flush_size);
-        if(mode != 2) {
+        if(mode != DATA_MODE_HTML) {
             flush_d(req, "\"", data, flush_size);
         } 
     }
 #endif
-    if(mode == 2) { 
+    if(mode == DATA_MODE_HTML) { 
         flush_d(req, "</td></tr></table>", data, flush_size);
     } else 
         flush_d(req, http_async_handler_strings[3], data, flush_size); // }\n
@@ -573,61 +655,7 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, uint8_t mode, strbf_t
     return ESP_OK;
 }
 
-static esp_err_t paths_handler(httpd_req_t *req, uint8_t mode, strbf_t * data, size_t flush_size) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
-    IMEAS_START();
-    DIR *dirp = NULL;
-    const struct dirent *ent;
-    char type;
-    char size[16] = {0};
-    char tpath[VFS_FILE_PATH_MAX];
-    char tbuffer[92] ={0};
-    uint8_t i = 0;
-    if(mode==1)
-        httpd_resp_send_chunk(req, "{\"paths\": [", 11);
-    while(i < VFS_MAX_PARTS) {
-        if(vfs_ctx.parts[i].is_mounted) {
-            if(i > 0) {
-                if(mode==1)
-                    strbf_putc(data, ',');
-                else
-                    strbf_putc(data, '\n');
-            }
-            if(mode==1)
-                flush_d(req, "{\"path\":\"", data, flush_size);
-            else
-                flush_d(req, "Path: ", data, flush_size);
-            flush_d(req, vfs_ctx.parts[i].mount_point, data, flush_size);
-            strbf_putc(data, '"');
-            if(mode==1)
-                flush_d(req, http_async_handler_strings[6], data, flush_size);
-            else
-                flush_d(req, ", Total bytes: ", data, flush_size);
-            strbf_putul(data, vfs_ctx.parts[i].total_bytes);
-            if(mode==1)
-                flush_d(req, http_async_handler_strings[7], data, flush_size);
-            else
-                flush_d(req, ", Free bytes: ", data, flush_size);
-            strbf_putul(data, vfs_ctx.parts[i].free_bytes);
-            if(mode==1)
-                strbf_putc(data, '}');
-        }
-        i++;
-    }
-    if(mode==1)
-        flush_d(req, "]}\r\n", data, flush_size);
-    if(data->cur - data->start > 0) {
-        httpd_resp_send_chunk(req, data->start, data->cur - data->start);
-        strbf_shape(data, 0);
-    }
-    IMEAS_END(TAG, "[%s] %s done, took: %llu us", __func__, req->uri);
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
-    task_memory_info(__func__);
-#endif
-    return ESP_OK;
-}
-
-off_t file_handler(httpd_req_t *req, strbf_t *path, size_t len, const char * name, strbf_t *data, size_t flush_size, uint32_t idx, uint8_t mode) {
+off_t file_handler(httpd_req_t *req, strbf_t *path, size_t len, const char * name, strbf_t *data, size_t flush_size, uint32_t idx, data_mode_t mode) {
     struct tm *tm_info;
     struct stat sb;
     int statok;
@@ -642,8 +670,8 @@ off_t file_handler(httpd_req_t *req, strbf_t *path, size_t len, const char * nam
         goto done;
     }
     tbuffer[0] = '\0';
-    if(mode == 2) flush_d(req, "<tr>", data, flush_size);
-    else if(mode==1) {
+    if(mode == DATA_MODE_HTML) flush_d(req, "<tr>", data, flush_size);
+    else if(mode == DATA_MODE_JSON) {
         if(!idx) strbf_putc(data, '{');
         else flush_d(req, ",{", data, flush_size);
     }
@@ -654,50 +682,39 @@ off_t file_handler(httpd_req_t *req, strbf_t *path, size_t len, const char * nam
     if ((sb.st_mode & S_IFMT) == S_IFDIR) type = 'd';
     else if (strstr(name, "config")) type = 'c';
     else type = 'f';
-    if(mode==2) {
+    if(mode == DATA_MODE_HTML) {
         if(type == 'f') flush_d(req, "<td><input type=\"checkbox\"></td>", data, flush_size);
         else flush_d(req, "<td></td>", data, flush_size);
         flush_d(req, "<td><a href=\"", data, flush_size);
         flush_d(req, path->start, data, flush_size);
         flush_d(req, "\">", data, flush_size);
     }
-    else if(mode==1)  flush_d(req, "\"name\":\"", data, flush_size);
+    else if(mode == DATA_MODE_JSON)  flush_d(req, "\"name\":\"", data, flush_size);
     else strbf_putc(data, ' ');
     flush_d(req, name, data, flush_size);
-    if(mode==2) {
+    if(mode == DATA_MODE_HTML) {
         flush_d(req, "</a>", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     }
-    else if(mode==1) flush_d(req, "\",\"date\":\"", data, flush_size);
+    else if(mode == DATA_MODE_JSON) flush_d(req, "\",\"date\":\"", data, flush_size);
     else strbf_putc(data, ' ');
     if (!statok) flush_d(req, tbuffer, data, flush_size);
-    if(mode==2)  flush_d(req, http_async_handler_strings[9], data, flush_size);
-    else if(mode==1) flush_d(req, "\",\"size\":\"", data, flush_size);
+    if(mode == DATA_MODE_HTML)  flush_d(req, http_async_handler_strings[9], data, flush_size);
+    else if(mode == DATA_MODE_JSON) flush_d(req, "\",\"size\":\"", data, flush_size);
     else strbf_putc(data, ' ');
     if (!statok && (sb.st_mode & S_IFMT) == S_IFREG){
-        if(mode == 2) {
-            uint8_t pow = 0;
-            uint64_t size = sb.st_size;
-            while(size > 1024) {
-                size /= 1024;
-                pow++;
-            }
-            strbf_putul(data, size);
-            strbf_putc(data, "BKMGT"[pow]);
-        }
-        else strbf_putul(data, sb.st_size);
-        ret += sb.st_size;
+        ret += calc_size(sb.st_size, data, mode);
     }
-    if(mode==2) flush_d(req, "</td><td class=\"hide-xs\">", data, flush_size);
-    else if(mode==1) flush_d(req, "\",\"type\":\"", data, flush_size);
+    if(mode == DATA_MODE_HTML) flush_d(req, "</td><td class=\"hide-xs\">", data, flush_size);
+    else if(mode == DATA_MODE_JSON) flush_d(req, "\",\"type\":\"", data, flush_size);
     else strbf_putc(data, ' ');
     strbf_putc(data, type == 'c' ? 'f' : type);
-    if(mode==2) flush_d(req, "</td><td class=\"hide-xs\">", data, flush_size);
-    else if(mode==1) flush_d(req, "\",\"mode\":\"", data, flush_size);
+    if(mode == DATA_MODE_HTML) flush_d(req, "</td><td class=\"hide-xs\">", data, flush_size);
+    else if(mode == DATA_MODE_JSON) flush_d(req, "\",\"mode\":\"", data, flush_size);
     else strbf_putc(data, ' ');
     if (type == 'c')  strbf_putc(data, 'r');
     else flush_d(req, "rw", data, flush_size);
-    if(mode==2) {
+    if(mode == DATA_MODE_HTML) {
         flush_d(req, "</td>", data, flush_size);
         if(type == 'f') {
             flush_d(req, "<td><div role=\"group\" data-file=\"", data, flush_size);
@@ -709,14 +726,14 @@ off_t file_handler(httpd_req_t *req, strbf_t *path, size_t len, const char * nam
         }
         flush_d(req, "</tr>", data, flush_size);
     }
-    if(mode==1) flush_d(req, "\"}", data, flush_size);
+    if(mode == DATA_MODE_JSON) flush_d(req, "\"}", data, flush_size);
     else strbf_putc(data, '\n');
     *data->cur=0;
     done:
     return ret;
 }
 
-static esp_err_t directory_handler(httpd_req_t *req, const char *path, const char *match, uint8_t mode, strbf_t * data, size_t flush_size) {
+static esp_err_t directory_handler(httpd_req_t *req, const char *path, const char *match, data_mode_t mode, strbf_t * data, size_t flush_size) {
     ILOG(TAG, "[%s] uri: %s, path: %s", __func__, req->uri, path ? path : "null");
     IMEAS_START();
     DIR *dirp = NULL;
@@ -733,16 +750,16 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     dirp = opendir(path);
     if (!dirp) {
         httpd_resp_set_status(req, HTTPD_500);
-        if(mode==2)      httpd_resp_send_chunk(req, "<div>Error opening directory</div>", 35);
-        else if(mode==1) http_send_json_msg(req, "Error opening directory", 23, 1, 0, 0);
+        if(mode == DATA_MODE_HTML)      httpd_resp_send_chunk(req, "<div>Error opening directory</div>", 35);
+        else if(mode == DATA_MODE_JSON) http_send_json_msg(req, "Error opening directory", 23, 1, 0, 0);
         else             httpd_resp_send_chunk(req, "Error opening directory.\n", 24);
         goto done;
     }
     httpd_resp_set_status(req, HTTPD_200);
-    if(mode==2) {
+    if(mode == DATA_MODE_HTML) {
        flush_d(req, "<table><thead><tr><th><input type=\"checkbox\"></th><th>Name</th><th>Date</th><th>Size</th><th>Size</th><th>Type</th><th>Mode</th><th>Actions</th></tr></thead><tbody>", data, flush_size);
     }
-    else if(mode==1) {
+    else if(mode == DATA_MODE_JSON) {
         flush_d(req, "{\"path\":\"", data, flush_size);
         flush_d(req, path, data, flush_size);
         strbf_putc(data, '"');
@@ -759,7 +776,7 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
         ++nitems;
     }
     closedir(dirp);
-    if(mode == 2) flush_d(req, "</tbody></table>", data, flush_size);
+    if(mode == DATA_MODE_HTML) flush_d(req, "</tbody></table>", data, flush_size);
     else if(mode == 1) {
         strbf_putc(data, ']');
         flush_d(req, ",\"total\":", data, flush_size);
@@ -776,7 +793,7 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
     DLOG(TAG, "[%s] Total %lu items, %llu bytes, %u bytes sent.", __FUNCTION__, nitems, total, i);
 #endif
     done:
-    IMEAS_END(TAG, "[%s] %s done, took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s done", req->uri);
 #if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
@@ -844,7 +861,7 @@ static esp_err_t http_resp_file_html_handler(httpd_req_t *req, const char *name,
     if(data->cur > data->start) {
         httpd_resp_send_chunk(req, data->start, data->cur - data->start);
     }
-    IMEAS_END(TAG, "[%s] %s took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s", req->uri);
     return ESP_OK;
 }
 
@@ -872,7 +889,7 @@ static esp_err_t embed_get_handler(httpd_req_t *req, const uint8_t *start, const
         embed_size -= chunk_size;
     }
     done:
-    IMEAS_END(TAG, "[%s] %s took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s", req->uri);
     return ret;
 }
 
@@ -957,7 +974,7 @@ static esp_err_t index_get_handler(httpd_req_t * req, char *path) {
     }
     if (data)
         free(data);
-    IMEAS_END(TAG, "[%s] %s took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s", req->uri);
     return ret;
 }
 #endif
@@ -1008,7 +1025,7 @@ static esp_err_t try_local_file(httpd_req_t *req, size_t ulen, const char *name,
     }
     ret = ESP_FAIL;
     finishing:
-    IMEAS_END(TAG, "[%s] %s took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s", req->uri);
     return ret;
 }
 
@@ -1129,7 +1146,7 @@ esp_err_t api_handler(httpd_req_t * req) {
         httpd_resp_send_chunk(req, "{\"user\":\"admin\",\"logged\":\"no\"}\r\n", 32);
     } else if (strstr(uri, "fw/version") == uri) {
         strbf_puts(&buf,"{\"version\":\"");
-        strbf_puts(&buf, m_context.SW_version);
+        strbf_puts(&buf, PROJECT_VER_EXT);
         strbf_puts(&buf, "\"}");
         http_send_json_msg(req, "ok", 2, 0, buf.start, buf.cur - buf.start);
     } else if (strstr(uri, "system") == uri) {
@@ -1140,7 +1157,7 @@ esp_err_t api_handler(httpd_req_t * req) {
             system_bat_get_handler(req);
         } else if (strstr(uri, "restart") == uri) {
             http_send_json_msg(req, "restart pending.", 16, 0, 0, 0);
-            m_context.request_restart = 1;
+            m_context.request_restart = 2;
         }
         else {
             msg = "path not found";
@@ -1207,7 +1224,7 @@ esp_err_t api_handler(httpd_req_t * req) {
     }
     strbf_free(&buf);
     httpd_resp_send_chunk(req, 0, 0);
-    IMEAS_END(TAG, "[%s] %s done, took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s done", req->uri);
 #if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
@@ -1327,7 +1344,7 @@ finishing:
     task_memory_info(__func__);
 #endif
     strbf_free(&buf);
-    IMEAS_END(TAG, "[%s] %s took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s", req->uri);
     return ESP_OK;
 }
 
@@ -1746,7 +1763,7 @@ done:
     strbf_free(&data);
     free(buf);
     free(boundary);
-    IMEAS_END(TAG, "[%s] %s took: %llu us", __func__, req->uri);
+    IMEAS_END_ARGS(TAG, " %s", req->uri);
     return err;
 }
 

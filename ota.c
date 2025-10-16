@@ -11,9 +11,21 @@
 #include "esp_system.h"
 
 #include "ota.h"
-#include "context.h"
+// #include "context.h"
+#include "ota_events.h"
 
-static const char* TAG = "ota";
+static const char* TAG = "fw_ota";
+
+ESP_EVENT_DEFINE_BASE(OTA_FW_EVENT);
+
+#if (C_LOG_LEVEL < 3)
+static const char * const _ota_fw_event_strings[] = { OTA_FW_EVENT_LIST(STRINGIFY) };
+const char * ota_fw_event_strings(int id) {
+    return _ota_fw_event_strings[id];
+}
+#else
+const char * ota_fw_event_strings(int id) {return "OTA_AUTO_EVENT";}
+#endif
 
 static TimerHandle_t timeout_timer;
 static esp_ota_handle_t handle;
@@ -31,44 +43,45 @@ static struct
     ota_state_t state;
 } ota;
 
-extern struct context_s m_context;
+// extern struct context_s m_context;
 
 esp_err_t ota_deinit() {
-    ESP_LOGI(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     // Remove timeout timer
     esp_err_t result = ESP_OK;
     if (timeout_timer != NULL) {
         if (xTimerDelete(timeout_timer, 0) == pdPASS)
             timeout_timer = NULL;
         else
-            ESP_LOGW(TAG, "Failed to delete timeout timer.");
+            WLOG(TAG, "Failed to delete timeout timer.");
     }
 
     // Check for non-initalized or error state
     if (ota.state != ota_state_InProgress) {
         ota.state = ota_state_Idle;
-        return ESP_ERR_INVALID_STATE;
+        result = ESP_ERR_INVALID_STATE;
+        goto error;
     }
 
    result = esp_ota_end(handle);
     if (result != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_end failed, err=0x%x.", result);
+        ELOG(TAG, "esp_ota_end failed, err=0x%x.", result);
         ota.state = ota_state_Idle;
-        goto finish;
+        goto error;
     }
 
     ota.state = ota_state_Idle;
 
-    finish:
-    m_context.firmware_update_started = 0;
-
-    return ESP_OK;
+    error:
+    if(result!= ESP_OK)
+        esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY);
+    return result;
 }
 
 static struct end_result_s timer_state;
 
 static void timer_cb(TimerHandle_t t) {
-    ESP_LOGW(TAG, "Timeout during update. Performing cleanup...");
+    WLOG(TAG, "Timeout during update. Performing cleanup...");
     struct end_result_s * handle = (struct end_result_s*)pvTimerGetTimerID(t);
     if (handle != 0)
         handle->callback();
@@ -79,7 +92,7 @@ static void timer_b_cb() {
 }
 
 esp_err_t ota_start() {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     // Don't attempt to re-init an ongoing OTA
     if (ota.state != ota_state_Idle)
         return ESP_ERR_INVALID_STATE;
@@ -90,19 +103,19 @@ esp_err_t ota_start() {
     if (boot != active)
         return ESP_ERR_INVALID_STATE;
 
-    ESP_LOGI(TAG, "Boot partition type %d subtype %d at offset 0x%"PRIu32".", boot->type, boot->subtype, boot->address);
-    ESP_LOGI(TAG, "Active partition type %d subtype %d at offset 0x%"PRIu32".", active->type, active->subtype, active->address);
+    ILOG(TAG, "Boot partition type %d subtype %d at offset 0x%"PRIu32".", boot->type, boot->subtype, boot->address);
+    ILOG(TAG, "Active partition type %d subtype %d at offset 0x%"PRIu32".", active->type, active->subtype, active->address);
 
     // Grab next update target
     const esp_partition_t* target = esp_ota_get_next_update_partition(NULL);
     if (target == NULL)
         return ESP_ERR_NOT_FOUND;
 
-    ESP_LOGI(TAG, "Target partition type %d subtype %d at offset 0x%"PRIu32".", target->type, target->subtype, target->address);
+    ILOG(TAG, "Target partition type %d subtype %d at offset 0x%"PRIu32".", target->type, target->subtype, target->address);
 
     esp_err_t result = esp_ota_begin(target, OTA_SIZE_UNKNOWN, &handle);
     if (result != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_begin failed, error=%d.", result);
+        ELOG(TAG, "esp_ota_begin failed, error=%d.", result);
         return result;
     }
 
@@ -114,9 +127,8 @@ esp_err_t ota_start() {
 
     // Start the timer
     if (xTimerStart(timeout_timer, pdMS_TO_TICKS(100)) != pdPASS)
-        ESP_LOGE(TAG, "Failed to start timeout timer.");
-
-    m_context.firmware_update_started = 1;
+        ELOG(TAG, "Failed to start timeout timer.");
+    esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_START, NULL,0, portMAX_DELAY);
     ota.state = ota_state_InProgress;
     return ESP_OK;
 }
@@ -128,7 +140,7 @@ esp_err_t ota_write(uint8_t* data, uint16_t length) {
 
     esp_err_t result = esp_ota_write(handle, data, length);
     if (result != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_write failed, err=%d.", result);
+        ELOG(TAG, "esp_ota_write failed, err=%d.", result);
         ota.state = ota_state_Error;
         return result;
     }
@@ -141,14 +153,14 @@ esp_err_t ota_write(uint8_t* data, uint16_t length) {
 }
 
 static void cb_when_done() {
-    ESP_LOGI(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
+    esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FINISH, NULL,0, portMAX_DELAY);
     ota.state = ota_state_Reboot;
-    m_context.request_restart = 1;
     //esp_restart();
 }
 
 esp_err_t ota_end(struct end_result_s * result) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     // Construct result object
     result->callback = 0;
 
@@ -160,18 +172,20 @@ esp_err_t ota_end(struct end_result_s * result) {
     const esp_partition_t* target = esp_ota_get_next_update_partition(NULL);
     result->status = esp_ota_set_boot_partition(target);
     if (result->status != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed, err=%d.", result->status);
+        ELOG(TAG, "esp_ota_set_boot_partition failed, err=%d.", result->status);
         ota.state = ota_state_Idle;
-        goto finish;
+        goto error;
     }
 
     const esp_partition_t* boot = esp_ota_get_boot_partition();
-    ESP_LOGI(TAG, "Boot partition type %d subtype %d at offset 0x%"PRIu32".", boot->type, boot->subtype, boot->address);
+    ILOG(TAG, "Boot partition type %d subtype %d at offset 0x%"PRIu32".", boot->type, boot->subtype, boot->address);
 
     // Success. Update status and set reboot callback
     result->status = ESP_OK;
     result->callback = cb_when_done;
-
+    error:
+    if(result->status != ESP_OK)
+         esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY);
     finish:
     return result->status;
 }
