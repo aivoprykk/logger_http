@@ -206,7 +206,7 @@ static ota_check_result_t validate_image_header(esp_app_desc_t *new_app_info) {
     return res;
 }
 
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
 static const char * const _http_client_events [] = {
     "HTTP_EVENT_ERROR",
     "HTTP_EVENT_ON_CONNECTED",
@@ -347,11 +347,9 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
                 goto done;
             }
         }
-#if (C_LOG_LEVEL < 1)
-        ILOG(TAG, "HTTP GET Status = %d, content_length = %"PRId64" resp = %s",
+        DLOG(TAG, "HTTP GET Status = %d, content_length = %"PRId64" resp = %s",
                 esp_http_client_get_status_code(client),
                 esp_http_client_get_content_length(client), local_response_buffer);
-#endif
         int len = esp_http_client_get_content_length(client);
         int copy_len = MIN(len, LOCAL_BUF_LEN - 1);
         local_response_buffer[copy_len] = 0;

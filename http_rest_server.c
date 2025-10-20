@@ -179,7 +179,7 @@ static esp_err_t initialise_mdns(void) {
     ret = mdns_service_add(hn, "_http", "_tcp", 80, serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0]));
     done:
     if(ret)
-        ESP_LOGE(TAG, "%s: %s", http_rest_server_errors[2], esp_err_to_name(ret));
+        ELOG(TAG, "%s: %s", http_rest_server_errors[2], esp_err_to_name(ret));
     return ret;
 }
 
@@ -213,7 +213,7 @@ esp_err_t http_stop_webserver() {
         if(!ret) {
             server = NULL;
         } else {
-            ESP_LOGE(TAG, "%s", http_rest_server_errors[1]);
+            ELOG(TAG, "%s", http_rest_server_errors[1]);
         }
         #if defined(X1)
         stop_async_req_workers();
@@ -229,7 +229,7 @@ void disconnect_handler(void *arg, esp_event_base_t event_base, int32_t event_id
         if (stop_webserver(*server) == ESP_OK) {
             *server = NULL;
         } else {
-            ESP_LOGE(TAG, "%s", http_rest_server_errors[1]);
+            ELOG(TAG, "%s", http_rest_server_errors[1]);
         }
         #if defined(X1)
         stop_async_req_workers();
@@ -249,7 +249,7 @@ void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, v
 }
 #endif  // !CONFIG_IDF_TARGET_LINUX
 
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
 static const char * const _http_server_events [] = {
     "HTTP_SERVER_EVENT_ERROR",
     "HTTP_SERVER_EVENT_START",
@@ -273,7 +273,7 @@ const char * http_server_events(int id) {
 static void esp_http_server_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
     if(base == ESP_HTTP_SERVER_EVENT) {
         esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
- #if (C_LOG_LEVEL < 2)
+ #if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
        switch(id) {
             case HTTP_SERVER_EVENT_ERROR: // 0
                 ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
@@ -312,22 +312,13 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
     else if(base == WIFI_EVENT) {
         switch(id) {
             case WIFI_EVENT_AP_START:
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
-#endif
                 http_start_webserver();
                 break;
             case WIFI_EVENT_AP_STOP:
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
-#endif
                 if (!wifi_context.s_sta_connection)
                     http_stop_webserver();
                 break;
             case WIFI_EVENT_STA_STOP:
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
-#endif
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
                 if(m_context.config->fwupdate.update_enabled)
                     https_ota_stop();
@@ -340,9 +331,6 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
     else if(base == IP_EVENT) {
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
-#endif
                 http_start_webserver();
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
                 if(m_context.config->fwupdate.update_enabled)
@@ -350,9 +338,6 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
 #endif
                 break;
             case IP_EVENT_STA_LOST_IP:
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings(id));
-#endif
                 if (!wifi_context.s_ap_connection)
                     http_stop_webserver();
     #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
@@ -374,7 +359,7 @@ esp_err_t http_rest_init(const char *basepath) {
         goto done;
     }
     if(esp_event_handler_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL)) {
-        ESP_LOGE(TAG, "[%s] Failed to register event handler", __func__);
+        ELOG(TAG, "[%s] Failed to register event handler", __func__);
         ret = ESP_FAIL;
         goto done;
     }

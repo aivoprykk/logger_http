@@ -87,7 +87,7 @@ static uint8_t is_on_async_worker_thread(void) {
 
 // Submit an HTTP req to the async worker queue
 static esp_err_t submit_async_req(httpd_req_t *req, httpd_req_handler_t handler) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     // must create a copy of the request that we own
     httpd_req_t *copy = NULL;
     esp_err_t err = httpd_req_async_handler_begin(req, &copy);
@@ -107,7 +107,7 @@ static esp_err_t submit_async_req(httpd_req_t *req, httpd_req_handler_t handler)
     // counting semaphore: if success, we know 1 or
     // more asyncReqTaskWorkers are available.
     if (xSemaphoreTake(worker_ready_count, ticks) == false) {
-        ESP_LOGE(TAG, "No workers are available");
+        ELOG(TAG, "No workers are available");
         httpd_req_async_handler_complete(copy);  // cleanup
         err = ESP_FAIL;
         goto done;
@@ -116,7 +116,7 @@ static esp_err_t submit_async_req(httpd_req_t *req, httpd_req_handler_t handler)
     // Since worker_ready_count > 0 the queue should already have space.
     // But lets wait up to 100ms just to be safe.
     if (xQueueSend(async_req_queue, &async_req, pdMS_TO_TICKS(100)) == false) {
-        ESP_LOGE(TAG, "worker queue is full");
+        ELOG(TAG, "worker queue is full");
         httpd_req_async_handler_complete(copy);  // cleanup
         ret = ESP_FAIL;
     }
@@ -135,7 +135,7 @@ static esp_err_t get_http_buffer(logger_buffer_usage_t usage_type,
                                 logger_buffer_size_t size_type,
                                 logger_buffer_handle_t *handle) {
     if (!logger_buffer_pool_is_initialized()) {
-        ESP_LOGE(TAG, "Buffer pool not initialized");
+        ELOG(TAG, "Buffer pool not initialized");
         return ESP_ERR_INVALID_STATE;
     }
     
@@ -153,16 +153,13 @@ static void release_http_buffer(logger_buffer_handle_t *handle) {
 
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepath, size_t pathlen, char ** data) {
     if(!filepath || !data) return ESP_FAIL;
-    
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] uri:%s type:%s", __func__, req->uri, filepath);
-#endif
+    DLOG(TAG, "[%s] uri:%s type:%s", __func__, req->uri, filepath);
     int ret = ESP_OK;
     if(!pathlen) pathlen = strlen(filepath);
     
     // Bounds checking
     if (pathlen == 0 || pathlen > VFS_FILE_PATH_MAX) {
-        ESP_LOGE(TAG, "Invalid filepath length: %zu", pathlen);
+        ELOG(TAG, "Invalid filepath length: %zu", pathlen);
         return ESP_FAIL;
     }
     
@@ -189,9 +186,7 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepa
             break;
         }
     }
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] done file: %s, type: %s", __FUNCTION__, filepath, *data);
-#endif
+    DLOG(TAG, "[%s] done file: %s, type: %s", __FUNCTION__, filepath, *data);
     if(**data)
         ret = httpd_resp_set_type(req, *data);
     done:
@@ -238,7 +233,7 @@ static esp_err_t http_send_json_msg(httpd_req_t *req, const char *msg, int msg_s
 }
 
 static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char *base) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     int ret = ESP_OK;
     strbf_t sb;
 #ifdef CONFIG_LOGGER_VFS_ENABLED
@@ -249,7 +244,7 @@ static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char
     if (!s_xfile_exists(strbf_finish(&sb))) {
         ret = mkdir(sb.start, 0755);
         if (ret < 0) {
-            ESP_LOGE(TAG, "Failed to mkdir %s (%s)", sb.start, esp_err_to_name(ret));
+            ELOG(TAG, "Failed to mkdir %s (%s)", sb.start, esp_err_to_name(ret));
             goto done;
         }
     }
@@ -257,9 +252,7 @@ static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char
     if (strstr(filename, base) == filename)
         p += strlen(base);
     strbf_put_path(&sb, p);
-#if (C_LOG_LEVEL < 2)
     DLOG(TAG, "Move to arcive %s => %s", filename, sb.start);
-#endif
     ret = s_rename_file_n(filename, sb.start, 0);
 #endif
     done:
@@ -281,7 +274,7 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
     
     // Get buffer for file transfer operations
     if (get_http_buffer(LOGGER_BUFFER_USAGE_HTTP_SCRATCH, LOGGER_BUFFER_LARGE, &buffer_handle) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get scratch buffer");
+        ELOG(TAG, "Failed to get scratch buffer");
         ret = ESP_FAIL;
         goto done;
     }
@@ -292,37 +285,33 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
         xultoa(len, &(tmp[0]));
         esp_err_t err = httpd_resp_set_hdr(req, "Content-Length", tmp);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
+            ELOG(TAG, "%s", http_async_handler_status_strings[3]);
         }
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
         else {
-            ILOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);    
+            DLOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);    
         }
 #endif
     }
     size_t chunk_size = SCRATCH_BUFSIZE;
     do {
         read_bytes = read(fd, chunk, chunk_size-1);
-#if (C_LOG_LEVEL < 1)
-        DLOG(TAG, "%ld ", read_bytes);
-#endif
+        TLOG(TAG, "%ld ", read_bytes);
         if (read_bytes == -1) {
-            ESP_LOGE(TAG, "Failed to read file.");
+            ELOG(TAG, "Failed to read file.");
             ret = ESP_FAIL;
             goto done;
         } else if (read_bytes > 0) {
             if (httpd_resp_send_chunk(req, chunk, read_bytes) != ESP_OK) {
                 // close(fd);
-                ESP_LOGE(TAG, "File sending failed!");
+                ELOG(TAG, "File sending failed!");
                 ret = ESP_FAIL;
                 goto done;
             }
         }
         i -= read_bytes;
     } while (read_bytes > 0);
-#if (C_LOG_LEVEL < 1)
-    DLOG(TAG, "%s", "\n");
-#endif
+    TLOG(TAG, "%s", "\n");
     done:
     // Release buffer back to pool
     release_http_buffer(&buffer_handle);
@@ -390,12 +379,12 @@ done:
 }
 
 static esp_err_t system_bat_get_handler(httpd_req_t * req) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     char buf[16] = {0};
     size_t len = 0;
     httpd_resp_send_chunk(req, "{\"battery\":\"", 12);
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-    len = f3_to_char(volt_read(), buf);
+    len = f3_to_char(adc_get_cached_batt_volt(), buf);
 #endif
     if(len) {
         httpd_resp_send_chunk(req, buf, len);
@@ -500,15 +489,13 @@ static esp_err_t paths_handler(httpd_req_t *req, data_mode_t mode, strbf_t * dat
         strbf_shape(data, 0);
     }
     // IMEAS_END_ARGS(TAG, " %s done", req->uri);
-#if (C_LOG_LEVEL < 2)
     task_memory_info(__func__);
-#endif
     return ESP_OK;
 }
 
 /* Simple handler for getting system handler */
 static esp_err_t system_info_get_handler(httpd_req_t *req, data_mode_t mode, strbf_t *data, size_t flush_size) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     char lbuf[16] = {0};
     size_t llen = 0;
     esp_chip_info_t chip_info;
@@ -578,7 +565,7 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, data_mode_t mode, str
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"battery\":", data, flush_size);
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-    llen = f3_to_char(volt_read(), lbuf);
+    llen = f3_to_char(adc_get_cached_batt_volt(), lbuf);
 #endif
     if(llen) {
         flush_d(req, lbuf, data, flush_size);
@@ -649,9 +636,7 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, data_mode_t mode, str
         httpd_resp_send_chunk(req, data->start, data->cur - data->start);
         strbf_shape(data, 0);
     }
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
-#endif
     return ESP_OK;
 }
 
@@ -789,14 +774,10 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
         strbf_shape(data, 0);
     }
     i += data->cur - data->start;
-#if (C_LOG_LEVEL < 2)
     DLOG(TAG, "[%s] Total %lu items, %llu bytes, %u bytes sent.", __FUNCTION__, nitems, total, i);
-#endif
     done:
     IMEAS_END_ARGS(TAG, " %s done", req->uri);
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
-#endif
     // strbf_free(&databuf);
     return ret;
 }
@@ -933,7 +914,7 @@ static esp_err_t index_get_handler(httpd_req_t * req, char *path) {
         *(data + sb.st_size) = 0;
         DLOG(TAG, "send index 0 : %s, %d, %s, %d", data, read_bytes, hostname, hl);
         if (close(fd)) {
-            ESP_LOGE(TAG, "Failed to close (%s)", strerror(errno));
+            ELOG(TAG, "Failed to close (%s)", strerror(errno));
         }
         if (read_bytes > 0) {
             int diff = 0;
@@ -944,7 +925,7 @@ static esp_err_t index_get_handler(httpd_req_t * req, char *path) {
                 be = strchr(bs, '"');
                 bl = be - bs;
                 diff = bl - hl;
-                ESP_LOGE(TAG, "send index diff: %d", diff);
+                ELOG(TAG, "send index diff: %d", diff);
                 if (diff > 0) {  // smaller buffer needed
                     for (int i = bs - data + 12, j = read_bytes; i < j; ++i) {
                         data[i] = data[i + diff];
@@ -965,7 +946,7 @@ static esp_err_t index_get_handler(httpd_req_t * req, char *path) {
             DLOG(TAG, "send index 1 : %s, %d", data, bl);
             httpd_resp_send_chunk(req, data, bl);
         } else {
-            ESP_LOGE(TAG, "send index failed.");
+            ELOG(TAG, "send index failed.");
             ret = ESP_FAIL;
         }
     }
@@ -1033,25 +1014,25 @@ esp_err_t add_cors(httpd_req_t *req, uint8_t api) {
     esp_err_t err = ESP_OK;
     err = httpd_resp_set_hdr(req, http_async_handler_strings[4], "*");
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
+        ELOG(TAG, "%s", http_async_handler_status_strings[3]);
     }
     if(api) {
         uint8_t tlen = 8;
         if (strstr(req->uri+tlen, "files") == req->uri+tlen) {
             err = httpd_resp_set_hdr(req, http_async_handler_strings[5], "GET, DELETE, POST");
             if (err != ESP_OK) {
-                ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
+                ELOG(TAG, "%s", http_async_handler_status_strings[3]);
             }
         } else if (strstr(req->uri+tlen, "config") == req->uri+tlen) {
             err = httpd_resp_set_hdr(req, http_async_handler_strings[5], "GET, POST, OPTIONS, PATCH");
             if (err != ESP_OK) {
-                ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
+                ELOG(TAG, "%s", http_async_handler_status_strings[3]);
             }
         }
     }
     err = httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "%s", http_async_handler_status_strings[3]);
+        ELOG(TAG, "%s", http_async_handler_status_strings[3]);
     }
     return err;
 }
@@ -1099,9 +1080,7 @@ int8_t try_file_path(httpd_req_t *req, strbf_t *pathbuf, const char * p) {
     }
     while(pathbuf->cur && *pathbuf->cur) ++pathbuf->cur;
     *pathbuf->cur = 0;
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] filepath:%s p:%s r:%s len:%d", __FUNCTION__, pathbuf->start, p, r, r-p);
-#endif
+    DLOG(TAG, "[%s] filepath:%s p:%s r:%s len:%d", __FUNCTION__, pathbuf->start, p, r, r-p);
     statok = stat(pathbuf->start, &sb);
     if (!statok) {
         if (!ret) {
@@ -1189,9 +1168,7 @@ esp_err_t api_handler(httpd_req_t * req) {
                 strbf_puts(&buf, p);
                 strbf_puts(&buf, "\",\"result\":\"");
                 if (err < 8) {
-#if (C_LOG_LEVEL < 2)
                     DLOG(TAG, "Going to %s file: %s, uri: %s", p, pathbuf.start, req->uri);
-#endif
                     if (ret == 2)
                         err = archive_file(req, pathbuf.start, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
                     else
@@ -1200,7 +1177,7 @@ esp_err_t api_handler(httpd_req_t * req) {
                 strbf_puts(&buf, !err ? "ok" : err > 7 ? "not found" : "failed");
                 strbf_puts(&buf, "\"}\r\n");
                 if (err) {
-                    ESP_LOGE(TAG, "Failed to %s file : %s", p, pathbuf.start);
+                    ELOG(TAG, "Failed to %s file : %s", p, pathbuf.start);
                     msg = buf.start;
                     msglen = buf.cur - buf.start;
                     goto err;
@@ -1225,9 +1202,7 @@ esp_err_t api_handler(httpd_req_t * req) {
     strbf_free(&buf);
     httpd_resp_send_chunk(req, 0, 0);
     IMEAS_END_ARGS(TAG, " %s done", req->uri);
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
-#endif
     return ret;
 }
 
@@ -1299,9 +1274,7 @@ esp_err_t get_handler(httpd_req_t *req) {
     add_cors(req, 0);
     p = req->uri + ulen - 1;
     while (p > req->uri && *p != '.' && *p != '/') --p;
-#if (C_LOG_LEVEL < 2)
     DLOG(TAG, "uri part p:%s", p);
-#endif
     if(ulen == 1)
         set_content_type_from_file(req, ".html", 5, &c);
     else 
@@ -1325,9 +1298,7 @@ esp_err_t get_handler(httpd_req_t *req) {
             else httpd_resp_set_status(req, HTTPD_500);
             goto finishing;
         }
-#if (C_LOG_LEVEL < 2)
        DLOG(TAG, "Going to open file: %s, uri: %s", &filepath[0], req->uri);
-#endif
         fd = open(&(filepath[0]), O_RDONLY, 0);
         if (fd) {
             // set_content_type_from_file(req, pathbuf.start, pathbuf.cur - pathbuf.start);
@@ -1340,9 +1311,7 @@ esp_err_t get_handler(httpd_req_t *req) {
     }
 finishing:
     httpd_resp_send_chunk(req, 0, 0);
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
-#endif
     strbf_free(&buf);
     IMEAS_END_ARGS(TAG, " %s", req->uri);
     return ESP_OK;
@@ -1409,9 +1378,7 @@ static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, s
             }
         }
         else p = data->start;
-#if (C_LOG_LEVEL < 1)
-        DLOG(TAG, "data: %s", p);
-#endif
+        TLOG(TAG, "data: %s", p);
         while(p && (!e || p<e)) {
             if(fbuf.cur-fbuf.start>len) strbf_shape(&fbuf, len);
             r = strchr(p, '|');
@@ -1430,9 +1397,7 @@ static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, s
                 fbuf.cur += e - p;
             }
             *fbuf.cur = 0;
-#if (C_LOG_LEVEL < 2)
             DLOG(TAG, "%s file: %s", action_name, fbuf.start);
-#endif
             if (!cb || cb(req, strbf_finish(&fbuf))) {
                 ret =http_send_json_msg(req, "Failed", 6, 3, 0, 0);
                 goto done;
@@ -1481,9 +1446,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             boundarylen = MIN(80, mpb0 - mpb);
             memcpy(boundary, mpb, boundarylen);
             boundary[boundarylen] = 0;
-#if (C_LOG_LEVEL < 1)
-            DLOG(TAG, "boundary found '%s' size '%" PRIu16 "'", boundary, boundarylen);
-#endif
+            TLOG(TAG, "boundary found '%s' size '%" PRIu16 "'", boundary, boundarylen);
         }
     }
 
@@ -1498,23 +1461,30 @@ esp_err_t post_handler(httpd_req_t *req) {
     if (u_mode == 1) {
         err = ota_start();
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to start ota.");
+            ELOG(TAG, "Failed to start ota.");
             ota_deinit();
             goto toerr;
         }
     }
-    uint32_t l = 0, now = 0;
+    uint32_t l = 0
+#if C_LOG_LEVEL <= LOG_WARN_NUM
+    , now = 0;
+#else
+    ;
+#endif
     uint8_t retry_times = 0;
     while (total_len > 0) {
         // Read the data for the request
+#if C_LOG_LEVEL <= LOG_WARN_NUM
         now = get_millis();
+#endif
         if ((recieved = httpd_req_recv(req, buf, MIN(total_len, buflen))) <= 0) {
             if (recieved == HTTPD_SOCK_ERR_TIMEOUT) {
                 // Retry receiving if timeout occurred
-                ESP_LOGW(TAG, "Socket timeout after %lu ms, retrying ...", get_millis() - now);
+                WLOG(TAG, "Socket timeout after %lu ms, retrying ...", get_millis() - now);
                 if(retry_times++ < 3) continue;
             }
-            ESP_LOGE(TAG, "http recieve data timeout, hanged at byte %lu", l);
+            ELOG(TAG, "http recieve data timeout, hanged at byte %lu", l);
             goto toerr; 
         }
 
@@ -1526,9 +1496,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                 parts[mpart_num].end_mark = 0;
             }
             if (recieved < buflen && recieved >= total_len) {
-#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] all data recieved bl:%" PRIu16 " rc:%d tl:%d", __FUNCTION__, buflen, recieved, total_len);
-#endif
                 *(buf + recieved) = 0;
             }
             mpb = mpb0 = buf;
@@ -1544,9 +1512,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                     memcpy(fname, mpb0, fnamelen);
                     fname[fnamelen] = 0;
                 }
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] found multipart file begin, fname: '%s' len: '%d'", __FUNCTION__, fname, fnamelen);
-#endif
                 parts[mpart_num].end_mark = (buf + recieved);
                 // printf("[%s] start mpb(001): '%s' \n", __FUNCTION__, mpb);
                 while (mpb && mpb < parts[mpart_num].end_mark && !(is_crln_safe(mpb) && is_crln_safe(mpb + 2))) {
@@ -1601,7 +1567,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             if (u_mode == 1 && parts[0].end_mark) {
                 err = ota_write((uint8_t *)parts[0].start_mark, parts[0].end_mark - parts[0].start_mark);
                 if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to write ota.");
+                    ELOG(TAG, "Failed to write ota.");
                     ota_deinit();
                     goto toerr;
                 }
@@ -1627,9 +1593,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                     } else {
                         strbf_put_path(&pbuf, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
                     }
-#if CONFIG_LOGGER_HTTP_LOG_LEVEL < 2
                     DLOG(TAG, "[%s] open path: %s name: %s", __func__, pbuf.start, fname);
-#endif
                     fp = s_open(fname, pbuf.start, "w+");
                 }
                 if (fp >= 0) {
@@ -1642,9 +1606,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                 break;
             }
         } else {
-#if (C_LOG_LEVEL < 2)
             DLOG(TAG, "[%s] got buffered data '%s'", __FUNCTION__, buf);
-#endif
             if(l+recieved >= buflen) {
                 ELOG(TAG, "[%s] Buffer overflow.", __func__);
                 goto toerr;
@@ -1653,9 +1615,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             
         }
         l += recieved;
-#if (C_LOG_LEVEL < 2)
         DLOG(TAG, "[%s] recieved: %d, total: %d, l: %lu", __FUNCTION__, recieved, total_len, l);
-#endif
         total_len -= recieved;
         memcpy(prev, buf + recieved - 11, 11);
         prev[11] = 0;
@@ -1664,23 +1624,19 @@ esp_err_t post_handler(httpd_req_t *req) {
         if (u_mode == 1) {
             err = ota_end(&ota_result);
             if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to finish ota.");
+                ELOG(TAG, "Failed to finish ota.");
                 ota_deinit();
             };
             ILOG(TAG, "Ota finished%s", ".");
         } else {
             if (fp > 0) {
-#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] Close file being saved to %s", __func__, fname);
-#endif
                 close(fp);
             } else
                 goto toerr;
         }
     }
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "Post request saved %lu bytes.", l);
-#endif
+    DLOG(TAG, "Post request saved %lu bytes.", l);
     if (!is_multipart) {
         if (!data.start || data.cur == data.start) {
             goto toerr;
@@ -1702,13 +1658,13 @@ esp_err_t post_handler(httpd_req_t *req) {
         }
         if (strstr(mpb, "files/delete") == mpb) {
             if(bulk_manage_files(req, fname, 64, &data, delete_file_cb, "delete") != 0) {
-                ESP_LOGE(TAG, "[%s] delete failed.", __FUNCTION__);
+                ELOG(TAG, "[%s] delete failed.", __FUNCTION__);
             }
             goto done;
         }
         if (strstr(mpb, "files/archive") == mpb) {
             if(bulk_manage_files(req, fname, 64, &data, archive_file_cb, "archive") != 0) {
-                ESP_LOGE(TAG, "[%s] archive failed.", __FUNCTION__);
+                ELOG(TAG, "[%s] archive failed.", __FUNCTION__);
             }
             goto done;
         }
@@ -1745,7 +1701,7 @@ esp_err_t post_handler(httpd_req_t *req) {
         }
         if (err < 0) {
     toerr:
-        ESP_LOGE(TAG, "[%s] Request failed.", __FUNCTION__);
+        ELOG(TAG, "[%s] Request failed.", __FUNCTION__);
         http_send_json_msg(req, "Could not finish.", 17, 1, 0, 0);
     } else
         http_send_json_msg(req, "Post data successfully", 22, 0, 0, 0);
@@ -1757,9 +1713,7 @@ done:
     httpd_resp_send_chunk(req, 0, 0);
     if (ota_result.status == ESP_OK && ota_result.callback)
         ota_result.callback();  // will request restart
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
-#endif
     strbf_free(&data);
     free(buf);
     free(boundary);
@@ -1771,7 +1725,7 @@ done:
 #undef GOMP_S
 #if defined(X1)
 static void async_req_worker_task(void *p) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     uint16_t loops = 0;
     while (true) {
         // counting semaphore - this signals that a worker
@@ -1790,7 +1744,7 @@ static void async_req_worker_task(void *p) {
             // Inform the server that it can purge the socket used for
             // this request, if needed.
             if (httpd_req_async_handler_complete(req) != ESP_OK) {
-                ESP_LOGE(TAG, "failed to complete async req");
+                ELOG(TAG, "failed to complete async req");
             }
             ILOG(TAG, "completed uri '%s'", req->uri);
         }
@@ -1802,12 +1756,12 @@ static void async_req_worker_task(void *p) {
 }
 
 void start_async_req_workers(void) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     
     // Initialize centralized buffer pool if not already done
     if (!logger_buffer_pool_is_initialized()) {
         if (logger_buffer_pool_init() != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to initialize centralized buffer pool");
+            ELOG(TAG, "Failed to initialize centralized buffer pool");
             return;
         }
     }
@@ -1816,13 +1770,13 @@ void start_async_req_workers(void) {
     worker_ready_count = xSemaphoreCreateCounting(worker_num,  // Max Count
                                                   0);          // Initial Count
     if (worker_ready_count == NULL) {
-        ESP_LOGE(TAG, "Failed to create workers counting Semaphore");
+        ELOG(TAG, "Failed to create workers counting Semaphore");
         return;
     }
     // create queue
     async_req_queue = xQueueCreate(3, sizeof(httpd_async_req_t));
     if (async_req_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create async_req_queue");
+        ELOG(TAG, "Failed to create async_req_queue");
         if(worker_ready_count) {
             vSemaphoreDelete(worker_ready_count);
             worker_ready_count = NULL;
@@ -1838,14 +1792,14 @@ void start_async_req_workers(void) {
                                    ASYNC_WORKER_TASK_PRIORITY,    // priority
                                    &worker_handles[i]);
             if (!success) {
-            ESP_LOGE(TAG, "Failed to start asyncReqWorker");
+            ELOG(TAG, "Failed to start asyncReqWorker");
             continue;
         }
     }
 }
 
 void stop_async_req_workers(void) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     if (worker_ready_count == NULL) {
         return;
     }
