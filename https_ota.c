@@ -25,7 +25,8 @@
 #include "esp_https_ota.h"
 
 #include "context.h"
-#include "logger_config.h"
+// #include "logger_config.h"
+#include "unified_config.h"
 #include "numstr.h"
 
 #ifndef CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
@@ -104,7 +105,7 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t id, vo
                 FUNC_ENTRY_ARGS(TAG, " %s", http_ota_event_strings(id));
                 break;
             case ESP_HTTPS_OTA_WRITE_FLASH:
-                DLOG(TAG, "[%s] %s: %d written", __func__, http_ota_event_strings(id), *(int *)event_data);
+                FUNC_ENTRY_ARGSD(TAG, "%s: %d written", http_ota_event_strings(id), *(int *)event_data);
                 break;
             case ESP_HTTPS_OTA_UPDATE_BOOT_PARTITION:
                 FUNC_ENTRY_ARGS(TAG, " %s. Next Partition: %d", http_ota_event_strings(id), *(esp_partition_subtype_t *)event_data);
@@ -188,11 +189,11 @@ static ota_check_result_t validate_image_header(esp_app_desc_t *new_app_info) {
     const char dev_str[] = "dev";
     size_t len = strlen(running_version), dlen = sizeof(dev_str) - 1;
     ota_check_result_t res = OTA_CHECK_VERSION_ERROR;
-    if(m_context.config->fwupdate.channel == FW_UPDATE_CHANNEL_DEV && running_version && len >= dlen && !strstr(running_version+len-dlen, dev_str)) { // device is prod, but should be dev
+    if(g_rtc_config.fw_update.update_channel == FW_UPDATE_CHANNEL_DEV && running_version && len >= dlen && !strstr(running_version+len-dlen, dev_str)) { // device is prod, but should be dev
         WLOG(TAG, "[%s] Device is in dev channel, but running version(%s) is prod, will reload.", __func__, running_version);
         goto set;
     }
-    if(m_context.config->fwupdate.channel == FW_UPDATE_CHANNEL_PROD && running_version && len >= dlen && strstr(running_version+len-dlen, dev_str) >= running_version + len-dlen) { // device is dev, but should be prod
+    if(g_rtc_config.fw_update.update_channel == FW_UPDATE_CHANNEL_PROD && running_version && len >= dlen && strstr(running_version+len-dlen, dev_str) >= running_version + len-dlen) { // device is dev, but should be prod
         WLOG(TAG, "[%s] Device is in prod channel, but running version(%s) is dev, will reload.", __func__, running_version);
         set:
         res = OTA_CHECK_VERSION_CHANNEL_CHANGED;
@@ -233,20 +234,20 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     int32_t id = evt->event_id;
     switch (id) {
         case HTTP_EVENT_ERROR:
-             ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
+             FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
              break;
         // case HTTP_EVENT_ON_CONNECTED:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
+        //     FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
         //     break;
         // case HTTP_EVENT_HEADER_SENT:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
+        //     FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
         //     break;
         // case HTTP_EVENT_ON_HEADER:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
+        //     FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
         //     printf("%.*s", evt->data_len, (char *)evt->data);
         //     break;
         case HTTP_EVENT_ON_DATA:
-            ILOG(TAG, "[%s] %s, len=%d", __func__, http_client_events(id), evt->data_len);
+            FUNC_ENTRY_ARGS(TAG, "%s, len=%d", http_client_events(id), evt->data_len);
             if (output_len == 0 && evt->user_data) {
                 // ILOG(TAG, "[%s] Resetting user_data buffer", __func__);
                 // we are just starting to copy the output data into the use
@@ -260,19 +261,19 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
                     memcpy(evt->user_data + output_len, evt->data, copy_len);
                 }
                 output_len += copy_len;
-                // ILOG(TAG, "[%s] '%s' %d", __func__, (char*)evt->user_data, output_len);
+                // FUNC_ENTRY_ARGS(TAG, "'%s' %d", (char*)evt->user_data, output_len);
             }
             break;
         case HTTP_EVENT_ON_FINISH:
-            ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
+            FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
             output_len = 0;
             break;
         case HTTP_EVENT_DISCONNECTED:
-            ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
+            FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
             output_len = 0;
             break;
         // case HTTP_EVENT_REDIRECT:
-        //     ILOG(TAG, "[%s] %s", __FUNCTION__, http_client_events(id));
+        //     FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
         //     break;
         default:
             break;
@@ -311,14 +312,14 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
     version_url_len = sizeof(OTA_URI) - 1;
     memcpy(&version_url[0], OTA_URI, version_url_len);
     version_url[version_url_len++] = '_'
-    if(m_context.config->fwupdate.channel == FW_UPDATE_CHANNEL_DEV) {
+    if(g_rtc_config.fw_update.update_channel == FW_UPDATE_CHANNEL_DEV) {
         memcpy(&version_url[version_url_len], "un", 2),version_url_len += 2;
     }
     memcpy(&version_url[version_url_len], "stable", 7),version_url_len += 7;
     version_url[version_url_len] = 0;
 #else
     int i = snprintf(version_url, OTA_URL_SIZE, OTA_URI"_%sstable",
-        (m_context.config->fwupdate.channel == FW_UPDATE_CHANNEL_DEV) ? "un" : ""
+        (g_rtc_config.fw_update.update_channel == FW_UPDATE_CHANNEL_DEV) ? "un" : ""
     );
     if (i < 0 || (size_t)i >= ota_url_size) {
         return ESP_ERR_NO_MEM;
@@ -353,7 +354,7 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
         int len = esp_http_client_get_content_length(client);
         int copy_len = MIN(len, LOCAL_BUF_LEN - 1);
         local_response_buffer[copy_len] = 0;
-        // DLOG(TAG, "[%s] '%s' %d %d", __func__, local_response_buffer, output_len, len);
+        // FUNC_ENTRY_ARGSD(TAG, "'%s' %d %d", local_response_buffer, output_len, len);
         if (len > 0) {
             while(local_response_buffer[len-1] == '\n' || local_response_buffer[len-1] == '\r' || local_response_buffer[len-1] == ' ') {
                 local_response_buffer[--len]=0;
@@ -503,7 +504,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
             ret = esp_https_ota_finish(https_ota_handle);
             if (ret == ESP_OK) {
                 https_ota_handle = NULL;
-                ILOG(TAG, "[%s] upgrade successful. Rebooting ...", __func__);
+                FUNC_ENTRY_ARGS(TAG, "upgrade successful. Rebooting ...");
                 // m_context.request_restart = 1;
                 goto ota_finish;
             }
@@ -539,7 +540,7 @@ void ota_task(void *pvParameter) {
     FUNC_ENTRY(TAG);
     next_check = esp_timer_get_time() + 10000000ULL; // 10 sec
     esp_err_t ret = ESP_OK;
-    ILOG(TAG, "[%s] Starting OTA task, interval: %llu", __func__, (CONFIG_OTA_CHECK_INTERVAL*1000ULL/1000000ULL));
+    FUNC_ENTRY_ARGS(TAG, "Starting OTA task, interval: %llu", (CONFIG_OTA_CHECK_INTERVAL*1000ULL/1000000ULL));
     while (ota_task_started) {
         if (next_check < esp_timer_get_time()) {
             ota_get_task(pvParameter);
@@ -573,7 +574,7 @@ void https_ota_start() {
     if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
         if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
             if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-                ILOG(TAG, "[%s] App is valid, rollback cancelled successfully", __func__);
+                FUNC_ENTRY_ARGS(TAG, "App is valid, rollback cancelled successfully");
             } else {
                 ELOG(TAG, "Failed to cancel rollback");
             }
@@ -583,7 +584,7 @@ void https_ota_start() {
     if (xMutex == NULL)
         xMutex = xSemaphoreCreateMutex();
     ota_task_started = 1;
-    xTaskCreate(&ota_task, "ota_task", CONFIG_OTA_AUTO_UPDATE_TASK_STACK_SIZE, NULL, 3, NULL);
+    xTaskCreatePinnedToCore(&ota_task, "ota_task", CONFIG_OTA_AUTO_UPDATE_TASK_STACK_SIZE, NULL, 3, NULL, 0);
 }
 
 void https_ota_stop() {

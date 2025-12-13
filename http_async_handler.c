@@ -13,9 +13,10 @@
 #include "uri_common.h"
 #include "http_async_handler.h"
 #include "http_rest_server.h"
-#include "logger_config.h"
+// #include "logger_config.h"
 #include "logger_buffer_pool.h"  // Add centralized buffer pool
 #include "context.h"
+#include "config.h"  // Now accessible from logger_common
 #if defined(CONFIG_USE_OTA)
 #include "ota.h"
 #endif
@@ -37,7 +38,7 @@
 #include "logger_wifi.h"
 #endif
 #if defined(CONFIG_GPS_LOG_ENABLED)
-#include "gps_user_cfg.h"
+// #include "gps_user_cfg.h"
 #endif
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
 #include "vfs.h"
@@ -55,6 +56,110 @@ static const char *TAG = "asynchandler";
 
 extern struct context_s m_context;
 extern char base_path[ESP_VFS_PATH_MAX + 1];
+
+// Hybrid config management helpers - replace logger_config dependency
+static int http_config_set_value(const char *name, const char *json_value, bool commit) {
+    FUNC_ENTRY_ARGS(TAG, "name: %s, value: %s", name, json_value);
+
+    // Find the sconfig item by name to determine type
+    // Convert JSON value to appropriate type and set using config_manager
+    esp_err_t err = ESP_FAIL;
+    bool is_json = false;
+    const char * json_value_pointer = json_value + (*json_value == '{' ? 8 : 0), 
+        *end_ptr = json_value + strlen(json_value);
+    if(json_value_pointer > json_value) {
+        while(json_value_pointer < end_ptr) {
+            if (json_value_pointer && 
+                (*(json_value_pointer-1) == ':'
+                && *(json_value_pointer-2) == '"'
+                && *(json_value_pointer-3) == 'e'
+                && *(json_value_pointer-4) == 'u'
+                && *(json_value_pointer-5) == 'l')) break; // just on value
+            ++json_value_pointer;
+        }
+        is_json = true;
+    }
+    if(!json_value_pointer || json_value_pointer >= end_ptr) {
+        ELOG(TAG, "Could not extract json value from input %s", json_value);
+        return err;
+    }
+    if (config_set_item_by_name(name, is_json ? json_value_pointer : json_value)) {
+        err = ESP_OK;
+    }
+    if (err == ESP_OK) {
+        return 0;
+    }
+    return -1;
+}
+
+static int http_config_save_all(void) {
+    FUNC_ENTRY(TAG);
+    // All config items (GPS and system) are persisted through config_manager
+    return config_manager_save() ? 0 : -1;
+}
+
+// Simple bulk config parser for {"config": {"key": "value", ...}}
+static int http_config_set_bulk(const char *json, bool commit) {
+    FUNC_ENTRY(TAG);
+
+    // Find "config" object
+    const char *config_start = strstr(json, "\"config\"");
+    if (!config_start) return -1;
+
+    const char *obj_start = strstr(config_start, "{");
+    if (!obj_start) return -1;
+
+    const char *obj_end = strstr(obj_start + 1, "}");
+    if (!obj_end) return -1;
+
+    const char *current = obj_start + 1;
+    while (current < obj_end) {
+        // Skip whitespace and commas
+        while (current < obj_end && (*current == ' ' || *current == '\t' || *current == '\n' || *current == '\r' || *current == ',')) current++;
+        if (current >= obj_end) break;
+
+        // Find "key"
+        if (*current != '"') break;
+        current++;
+        const char *key_start = current;
+        const char *key_end = strstr(current, "\"");
+        if (!key_end || key_end >= obj_end) break;
+
+        char key[64];
+        size_t key_len = key_end - key_start;
+        if (key_len >= 64) return -1;
+        memcpy(key, key_start, key_len);
+        key[key_len] = 0;
+
+        current = key_end + 1;
+
+        // Skip to :
+        while (current < obj_end && (*current == ' ' || *current == ':')) current++;
+
+        // Find "value"
+        if (*current != '"') break;
+        current++;
+        const char *value_start = current;
+        const char *value_end = strstr(current, "\"");
+        if (!value_end || value_end >= obj_end) break;
+
+        char value[64];
+        size_t value_len = value_end - value_start;
+        if (value_len >= 64) return -1;
+        memcpy(value, value_start, value_len);
+        value[value_len] = 0;
+
+        current = value_end + 1;
+
+        // Set the value without commit
+        if (http_config_set_value(key, value, false) != 0) return -1;
+    }
+
+    if (commit) {
+        return config_manager_save() ? 0 : -1;
+    }
+    return 0;
+}
 
 // Async reqeusts are queued here while they wait to
 // be processed by the workers
@@ -75,12 +180,12 @@ static uint8_t is_on_async_worker_thread(void) {
     uint8_t ret = false;
     for (int i = 0; i < worker_num; i++) {
         if (worker_handles[i] == handle) {
-            ILOG(TAG, "[%s] found on async worker thread num %d", __func__, i);
+            FUNC_ENTRY_ARGS(TAG, "found on async worker thread num %d", i);
             ret = true;
             goto done;
         }
     }
-    ILOG(TAG, "[%s] Not on async worker thread", __func__);
+    FUNC_ENTRY_ARGS(TAG, "Not on async worker thread");
     done:
     return false;
 }
@@ -153,7 +258,7 @@ static void release_http_buffer(logger_buffer_handle_t *handle) {
 
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepath, size_t pathlen, char ** data) {
     if(!filepath || !data) return ESP_FAIL;
-    DLOG(TAG, "[%s] uri:%s type:%s", __func__, req->uri, filepath);
+    FUNC_ENTRY_ARGSD(TAG, "uri:%s type:%s", req->uri, filepath);
     int ret = ESP_OK;
     if(!pathlen) pathlen = strlen(filepath);
     
@@ -186,7 +291,7 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepa
             break;
         }
     }
-    DLOG(TAG, "[%s] done file: %s, type: %s", __FUNCTION__, filepath, *data);
+    FUNC_ENTRY_ARGSD(TAG, "done file: %s, type: %s", filepath, *data);
     if(**data)
         ret = httpd_resp_set_type(req, *data);
     done:
@@ -214,7 +319,7 @@ static const char *http_async_handler_strings[] = {
 };
 
 static esp_err_t http_send_json_msg(httpd_req_t *req, const char *msg, int msg_size, int status, char * data, int data_size) {
-    DLOG(TAG, "[%s] %s", __func__, msg);
+    FUNC_ENTRY_ARGSD(TAG, "%s", msg);
     httpd_resp_send_chunk(req, "{\"status\":\"", 11); // status
     if(status==0)
         httpd_resp_send_chunk(req, http_async_handler_status_strings[0], 2);
@@ -260,7 +365,7 @@ static esp_err_t archive_file(httpd_req_t *req, const char *filename, const char
 }
 
 static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     IMEAS_START();
     int ret = 0;
     int32_t read_bytes, i = len;
@@ -289,7 +394,7 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
         }
 #if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
         else {
-            DLOG(TAG, "[%s] content length set as %s bytes", __FUNCTION__, tmp);    
+            FUNC_ENTRY_ARGSD(TAG, "content length set as %s bytes", tmp);    
         }
 #endif
     }
@@ -320,52 +425,44 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
 }
 
 static esp_err_t config_handler(httpd_req_t *req, const char *name, strbf_t * sb, size_t flush_size) {
-    ILOG(TAG, "[%s] %s %s", __func__, req->uri, name && *name ? name : "-");
+    FUNC_ENTRY_ARGS(TAG, "%s %s", req->uri, name && *name ? name : "-");
     IMEAS_START();
-    const logger_config_t *config = m_context.config;
     int ret = ESP_OK;
     // const char *start_ptr = config_item_names;
     // const char *end_ptr = 0;
     if (name && *name) {
-        gps_config_get(name, sb, 1);
-        if(sb->cur == sb->start) config_get(config, name, sb, 1);
-        if(sb->cur == sb->start){
+        while(name && *name=='/') ++name;
+        if (!config_manager_get_item_by_name(name, sb)) {
             ret = ESP_FAIL;
             goto done;
         }
     } else {
         strbf_puts(sb, "[");
-        if(sb->cur == sb->start){
-            ret = ESP_FAIL;
-            goto done;
-        }
-        
-        for(uint8_t i = 0; i < gps_user_cfg_item_count; i++) {
-            if(gps_cnf_get_item(i+CFG_GPS_ITEM_BASE, sb, 1) >= 253) {
-                continue;
-            }
-            strbf_putc(sb, ',');
-            // strbf_putc(sb, '\n');
-            if(sb->cur - sb->start >= flush_size) {
-                httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
-                strbf_shape(sb, 0);
-            }
-        }
-        for(uint8_t i = 0; i < config_item_count; i++) {
-            if(cnf_get_item(config, i, sb, 1) >= 253) {
-                continue;
-            }
-            if(i < config_item_count-1) {
-                strbf_putc(sb, ',');
-            }
-            if(sb->cur - sb->start >= flush_size) {
-                httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
-                strbf_shape(sb, 0);
+        bool first = true;
+        for (int8_t group = SCFG_GROUP_COUNT-1; group >= 0; --group) {
+            printf("group %hhd processing\n", group);
+            const size_t size = config_get_group_size(group);  // Cache size per group
+            for (int8_t index = 0; index < size; ++index) {
+                printf("item %hhd of %u processing\n", index, size);
+                if (!first) strbf_putc(sb, ',');
+                first = false;
+                config_manager_get_item_by_group_idx(group, index, sb);
+                if(*(sb->cur-1) == ',') {
+                    sb->cur--;
+                }
+                if(sb->cur - sb->start >= flush_size) {
+                    *sb->cur = '\0';
+                    // DLOG(TAG, "flush sb: %s", sb->start);
+                    httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
+                    strbf_shape(sb, 0);
+                }
             }
         }
         strbf_puts(sb, "]\n");
     }
+    DLOG(TAG, "groups sent, final flush at %d bytes", sb->cur - sb->start);
     if(sb->cur > sb->start) {
+        // DLOG(TAG, "flush sb: %s", sb->start);
         httpd_resp_send_chunk(req, sb->start, sb->cur - sb->start);
     }    
 done:
@@ -430,7 +527,7 @@ static uint64_t calc_size(uint64_t size, strbf_t * data, data_mode_t mode) {
 }
 
 static esp_err_t paths_handler(httpd_req_t *req, data_mode_t mode, strbf_t * data, size_t flush_size) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     // IMEAS_START();
     DIR *dirp = NULL;
     const struct dirent *ent;
@@ -719,7 +816,7 @@ off_t file_handler(httpd_req_t *req, strbf_t *path, size_t len, const char * nam
 }
 
 static esp_err_t directory_handler(httpd_req_t *req, const char *path, const char *match, data_mode_t mode, strbf_t * data, size_t flush_size) {
-    ILOG(TAG, "[%s] uri: %s, path: %s", __func__, req->uri, path ? path : "null");
+    FUNC_ENTRY_ARGS(TAG, "uri: %s, path: %s", req->uri, path ? path : "null");
     IMEAS_START();
     DIR *dirp = NULL;
     const struct dirent *ent;
@@ -774,7 +871,7 @@ static esp_err_t directory_handler(httpd_req_t *req, const char *path, const cha
         strbf_shape(data, 0);
     }
     i += data->cur - data->start;
-    DLOG(TAG, "[%s] Total %lu items, %llu bytes, %u bytes sent.", __FUNCTION__, nitems, total, i);
+    FUNC_ENTRY_ARGSD(TAG, "Total %lu items, %llu bytes, %u bytes sent.", nitems, total, i);
     done:
     IMEAS_END_ARGS(TAG, " %s done", req->uri);
     task_memory_info(__func__);
@@ -787,7 +884,7 @@ static const char * html_handler_str[] = {
 };
 
 static esp_err_t http_resp_file_html_handler(httpd_req_t *req, const char *name, strbf_t * data, size_t flush_size) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     IMEAS_START();
     flush_d(req, "<!DOCTYPE html><html lang=\"en\"><head><title>ESP-LOGGER ::", data, flush_size);
     flush_d(req, name, data, flush_size);
@@ -854,7 +951,7 @@ extern const unsigned char logo_svg_start[] asm("_binary_logo_svg_gz_start");
 extern const unsigned char logo_svg_end[]   asm("_binary_logo_svg_gz_end");
 
 static esp_err_t embed_get_handler(httpd_req_t *req, const uint8_t *start, const uint8_t *end) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     IMEAS_START();
     int ret = ESP_OK;
     size_t embed_size = (end - start);
@@ -891,7 +988,7 @@ static esp_err_t css_get_handler(httpd_req_t *req) {
 
 #if defined(CONFIG_LOGGER_HTTP_FILES_EXTERNAL)
 static esp_err_t index_get_handler(httpd_req_t * req, char *path) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     IMEAS_START();
     struct stat sb = {0};
     int statok = stat(path, &sb);
@@ -961,7 +1058,7 @@ static esp_err_t index_get_handler(httpd_req_t * req, char *path) {
 #endif
 
 static esp_err_t try_local_file(httpd_req_t *req, size_t ulen, const char *name, strbf_t * data, size_t blen) {
-    ILOG(TAG, "[%s] uri:%s name:%s", __func__, req->uri, name ? name : "-");
+    FUNC_ENTRY_ARGS(TAG, "uri:%s name:%s", req->uri, name ? name : "-");
     IMEAS_START();
     char tmp[16] = {0};
     const char *p, *s;
@@ -1038,7 +1135,7 @@ esp_err_t add_cors(httpd_req_t *req, uint8_t api) {
 }
 
 esp_err_t head_handler(httpd_req_t *req) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     httpd_resp_set_status(req, HTTPD_200);
     httpd_resp_send_chunk(req, 0, 0);
     return ESP_OK;
@@ -1059,8 +1156,9 @@ int8_t try_file_path(httpd_req_t *req, strbf_t *pathbuf, const char * p) {
     pathbuf->cur = pathbuf->start;
     if(base_path_needed) {
         if(base_path_needed > 1) {
-            for(i = 0, j = VFS_PART_MAX; j >= 0; --j) {
-                if(vfs_ctx.parts[j].is_mounted && vfs_ctx.gps_log_part != j) {
+            for(i = 0, j = VFS_MAX_PARTS-1; j >= 0; --j) {
+                if(vfs_ctx.parts[j].is_mounted && vfs_ctx.gps_log_part != j && vfs_ctx.parts[j].mount_point) {
+                    FUNC_ENTRY_ARGS(TAG, "try base path part %d", j);
                     strbf_puts(pathbuf, vfs_ctx.parts[j].mount_point);
                     break;
                 }
@@ -1080,7 +1178,7 @@ int8_t try_file_path(httpd_req_t *req, strbf_t *pathbuf, const char * p) {
     }
     while(pathbuf->cur && *pathbuf->cur) ++pathbuf->cur;
     *pathbuf->cur = 0;
-    DLOG(TAG, "[%s] filepath:%s p:%s r:%s len:%d", __FUNCTION__, pathbuf->start, p, r, r-p);
+    FUNC_ENTRY_ARGSD(TAG, "filepath:%s p:%s r:%s len:%d", pathbuf->start, p, r, r-p);
     statok = stat(pathbuf->start, &sb);
     if (!statok) {
         if (!ret) {
@@ -1104,10 +1202,10 @@ int8_t try_file_path(httpd_req_t *req, strbf_t *pathbuf, const char * p) {
 }
 
 esp_err_t api_handler(httpd_req_t * req) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     IMEAS_START();
     esp_err_t ret = ESP_OK;
-    size_t ulen = strlen(req->uri), tlen = 8, flush_size = SCRATCH_BUFSIZE-128, msglen = 0;
+    size_t ulen = strlen(req->uri), tlen = 8, flush_size = SCRATCH_BUFSIZE-256, msglen = 0;
     const char *uri = req->uri + tlen;
     const char *p = 0, *e = req->uri+ulen;
     char cbuf[64] = {0}, *c = &cbuf[0];
@@ -1207,7 +1305,7 @@ esp_err_t api_handler(httpd_req_t * req) {
 }
 
 static esp_err_t system_format_handler(httpd_req_t *req, strbf_t * data) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     esp_err_t ret = ESP_OK;
     // Parse mountpoint from URI
     const char *uri = req->uri;
@@ -1252,7 +1350,7 @@ static esp_err_t system_format_handler(httpd_req_t *req, strbf_t * data) {
 }
 
 esp_err_t get_handler(httpd_req_t *req) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     IMEAS_START();
     char content_type[64] = {0}, *c = content_type;
     char filepath[VFS_FILE_PATH_MAX] = {0};
@@ -1343,7 +1441,7 @@ struct mpart_s {
 typedef esp_err_t (*manage_file_cb_t)(httpd_req_t *req, const char *fname);
 
 static esp_err_t delete_file_cb(httpd_req_t *req, const char *fname) {
-    ILOG(TAG, "[%s] %s", __func__, fname);
+    FUNC_ENTRY_ARGS(TAG, "%s", fname);
     struct stat sb;
     if(!stat(fname, &sb)) {
         return unlink(fname);
@@ -1352,13 +1450,13 @@ static esp_err_t delete_file_cb(httpd_req_t *req, const char *fname) {
 }
 
 static esp_err_t archive_file_cb(httpd_req_t *req, const char *fname) {
-    ILOG(TAG, "[%s] %s", __func__, fname);
+    FUNC_ENTRY_ARGS(TAG, "%s", fname);
     return archive_file(req, fname, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
 }
 
 static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, strbf_t *data, manage_file_cb_t cb, const char * action_name) {
     if(!data) return ESP_ERR_INVALID_ARG;
-    ILOG(TAG, "[%s] %s %s", __func__, data->start, action_name ? action_name : "null");
+    FUNC_ENTRY_ARGS(TAG, "%s %s", data->start, action_name ? action_name : "null");
     char * p = 0, *r = 0, *e = 0;
     esp_err_t ret = ESP_OK;
     if(data->start && data->cur > data->start) {
@@ -1415,7 +1513,7 @@ static esp_err_t bulk_manage_files(httpd_req_t *req, char *fname, size_t flen, s
 }
 
 esp_err_t post_handler(httpd_req_t *req) {
-    ILOG(TAG, "[%s] %s", __func__, req->uri);
+    FUNC_ENTRY_ARGS(TAG, "%s", req->uri);
     IMEAS_START();
     struct mpart_s parts[4];
     memset(parts, 0, sizeof(parts));
@@ -1496,7 +1594,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                 parts[mpart_num].end_mark = 0;
             }
             if (recieved < buflen && recieved >= total_len) {
-                DLOG(TAG, "[%s] all data recieved bl:%" PRIu16 " rc:%d tl:%d", __FUNCTION__, buflen, recieved, total_len);
+                FUNC_ENTRY_ARGSD(TAG, "all data recieved bl:%" PRIu16 " rc:%d tl:%d", buflen, recieved, total_len);
                 *(buf + recieved) = 0;
             }
             mpb = mpb0 = buf;
@@ -1512,7 +1610,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                     memcpy(fname, mpb0, fnamelen);
                     fname[fnamelen] = 0;
                 }
-                ILOG(TAG, "[%s] found multipart file begin, fname: '%s' len: '%d'", __FUNCTION__, fname, fnamelen);
+                FUNC_ENTRY_ARGS(TAG, "found multipart file begin, fname: '%s' len: '%d'", fname, fnamelen);
                 parts[mpart_num].end_mark = (buf + recieved);
                 // printf("[%s] start mpb(001): '%s' \n", __FUNCTION__, mpb);
                 while (mpb && mpb < parts[mpart_num].end_mark && !(is_crln_safe(mpb) && is_crln_safe(mpb + 2))) {
@@ -1593,7 +1691,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                     } else {
                         strbf_put_path(&pbuf, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
                     }
-                    DLOG(TAG, "[%s] open path: %s name: %s", __func__, pbuf.start, fname);
+                    FUNC_ENTRY_ARGSD(TAG, "open path: %s name: %s", pbuf.start, fname);
                     fp = s_open(fname, pbuf.start, "w+");
                 }
                 if (fp >= 0) {
@@ -1606,7 +1704,7 @@ esp_err_t post_handler(httpd_req_t *req) {
                 break;
             }
         } else {
-            DLOG(TAG, "[%s] got buffered data '%s'", __FUNCTION__, buf);
+            FUNC_ENTRY_ARGSD(TAG, "got buffered data '%s'", buf);
             if(l+recieved >= buflen) {
                 ELOG(TAG, "[%s] Buffer overflow.", __func__);
                 goto toerr;
@@ -1615,7 +1713,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             
         }
         l += recieved;
-        DLOG(TAG, "[%s] recieved: %d, total: %d, l: %lu", __FUNCTION__, recieved, total_len, l);
+        FUNC_ENTRY_ARGSD(TAG, "recieved: %d, total: %d, l: %lu", recieved, total_len, l);
         total_len -= recieved;
         memcpy(prev, buf + recieved - 11, 11);
         prev[11] = 0;
@@ -1630,7 +1728,7 @@ esp_err_t post_handler(httpd_req_t *req) {
             ILOG(TAG, "Ota finished%s", ".");
         } else {
             if (fp > 0) {
-                DLOG(TAG, "[%s] Close file being saved to %s", __func__, fname);
+                FUNC_ENTRY_ARGSD(TAG, "Close file being saved to %s", fname);
                 close(fp);
             } else
                 goto toerr;
@@ -1688,11 +1786,27 @@ esp_err_t post_handler(httpd_req_t *req) {
                     r = 0;
                 }
             }
-            strbf_t respsb;
-            if (config_save_var(m_context.config, data.start, 0) > 0) {
+            // Parse JSON and set config values
+            int save_result = -1;
+            if (r && *r) {
+                // Single config item update
+                save_result = http_config_set_value(r, data.start, true);
+            } else {
+                // Bulk JSON config updates
+                config_lock(-1);  // portMAX_DELAY
+                save_result = http_config_set_bulk(data.start, true);
+                config_unlock();
+            }
+
+            if (save_result == 0) {
+                strbf_t respsb;
                 strbf_init(&respsb);
-                config_get(m_context.config, r, &respsb, 1);
-                http_send_json_msg(req, "Saved", 5, 0, respsb.start, respsb.cur - respsb.start);
+                // Get the updated value to confirm (for single item)
+                if (r && config_manager_get_item_by_name(r, &respsb) >= 0) {
+                    http_send_json_msg(req, "Saved", 5, 0, respsb.start, respsb.cur - respsb.start);
+                } else {
+                    http_send_json_msg(req, "Saved", 5, 0, 0, 0);
+                }
                 strbf_free(&respsb);
                 goto done;
             } else {
@@ -1786,11 +1900,11 @@ void start_async_req_workers(void) {
     // start worker tasks
     for (int i = 0; i < worker_num; i++) {
         ILOG(TAG, "Starting asyncReqWorker %d", i);
-        bool success = xTaskCreate(async_req_worker_task, "async_req_worker",
+        bool success = xTaskCreatePinnedToCore(async_req_worker_task, "async_req_worker",
                                    CONFIG_WEB_SERVER_ASYNC_WORKER_TASK_STACK_SIZE,  // stack size
                                    (void *)0,                     // argument
                                    ASYNC_WORKER_TASK_PRIORITY,    // priority
-                                   &worker_handles[i]);
+                                   &worker_handles[i], 0);        // pin to Core 0 for WiFi affinity
             if (!success) {
             ELOG(TAG, "Failed to start asyncReqWorker");
             continue;

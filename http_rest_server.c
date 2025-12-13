@@ -17,8 +17,9 @@
 #include "http_async_handler.h"
 #include "strbf.h"
 #include "uri_common.h"
-#include "context.h"
-#include "logger_config.h"
+// #include "context.h"
+// #include "logger_config.h"
+#include "unified_config.h"
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
 #include "https_ota.h"
 #endif
@@ -99,7 +100,7 @@ httpd_handle_t start_webserver(void) {
     // Start the httpd server
     if (httpd_start(&server, &config) == ESP_OK) {
         // Set URI handlers
-        DLOG(TAG, "[%s] Registering URI handlers", __func__);
+        FUNC_ENTRY_ARGSD(TAG, "Registering URI handlers");
         const struct m_handler *handler;
         for (int i = 1, j = sizeof(handlers) / sizeof(struct m_handler); i < j; ++i) {
             handler = &handlers[i];
@@ -153,9 +154,9 @@ static esp_err_t initialise_mdns(void) {
     char * hn = 0;
     hn = wifi_context.hostname;
 
-    if(m_context.config->hostname[0] != '\0') {
-        len = MIN(strlen(m_context.config->hostname), 32);
-        memcpy(hn, m_context.config->hostname, len);
+    if(g_rtc_config.advanced.hostname[0] != '\0') {
+        len = MIN(strlen(g_rtc_config.advanced.hostname), 32);
+        memcpy(hn, g_rtc_config.advanced.hostname, len);
     } else {
         len = MIN(strlen(CONFIG_MDNS_HOST_NAME), 32);
         memcpy(hn, CONFIG_MDNS_HOST_NAME, len);
@@ -276,34 +277,34 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
  #if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
        switch(id) {
             case HTTP_SERVER_EVENT_ERROR: // 0
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
+                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_START: // 1
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
+                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_ON_CONNECTED: // 2
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
+                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_ON_HEADER: // 3
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
+                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_HEADERS_SENT: // 4
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
+                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_ON_DATA: // 5
                 DLOG(TAG, "%s", ".");
                 break;
             case HTTP_SERVER_EVENT_SENT_DATA: // 6
-                ILOG(TAG, "[%s] -", __FUNCTION__);
+                FUNC_ENTRY_ARGS(TAG, "-");
                 break;
             case HTTP_SERVER_EVENT_DISCONNECTED: // 7
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
+                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
                 break;
             case HTTP_SERVER_EVENT_STOP: // 8
-                ILOG(TAG, "[%s] %s", __FUNCTION__, http_server_events(id));
+                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
                 break;
             default:
-                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // FUNC_ENTRY_ARGS(TAG, "%s:%" PRId32, base, id);
                 break;
         }
 #endif
@@ -320,7 +321,7 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 break;
             case WIFI_EVENT_STA_STOP:
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
-                if(m_context.config->fwupdate.update_enabled)
+                if(g_rtc_config.fw_update.update_enabled)
                     https_ota_stop();
 #endif
                 break;
@@ -333,7 +334,7 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
             case IP_EVENT_STA_GOT_IP:
                 http_start_webserver();
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
-                if(m_context.config->fwupdate.update_enabled)
+                if(g_rtc_config.fw_update.update_enabled)
                     https_ota_start();
 #endif
                 break;
@@ -341,7 +342,7 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 if (!wifi_context.s_ap_connection)
                     http_stop_webserver();
     #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
-                if(m_context.config->fwupdate.update_enabled)
+                if(g_rtc_config.fw_update.update_enabled)
                     https_ota_stop();
     #endif
                 break;
