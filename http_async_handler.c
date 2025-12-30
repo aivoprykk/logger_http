@@ -632,7 +632,7 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, data_mode_t mode, str
         flush_d(req, "GPS", data, flush_size);
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"gps\":\"", data, flush_size);
-    flush_d(req, ubx_chip_str(m_context.gps.ubx_device), data, flush_size);
+    flush_d(req, ubx_get_dev_str(), data, flush_size);
     if(mode != DATA_MODE_HTML) {
         flush_d(req, "\"", data, flush_size);
     }
@@ -1234,7 +1234,7 @@ esp_err_t api_handler(httpd_req_t * req) {
             system_bat_get_handler(req);
         } else if (strstr(uri, "restart") == uri) {
             http_send_json_msg(req, "restart pending.", 16, 0, 0, 0);
-            m_context.request_restart = 2;
+            m_context.request_app_mode = APP_MODE_RESTART;
         }
         else {
             msg = "path not found";

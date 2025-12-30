@@ -43,6 +43,7 @@ static const char *TAG = "http_server";
 
 httpd_handle_t *server = 0;
 uint8_t downloading_file = 0;
+bool http_rest_initialized = false;
 // char base_path[ESP_VFS_PATH_MAX + 1] = {0};
 
 struct m_handler {
@@ -354,11 +355,15 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
 }
 esp_err_t http_rest_init(const char *basepath) {
     ILOG(TAG, "[%s]", __func__);
-    esp_err_t ret = ESP_OK;
-    if (!basepath){
-        ret = ESP_FAIL;
-        goto done;
+    if(http_rest_initialized) {
+        DLOG(TAG, "[%s] already initialized", __func__);
+        return ESP_OK;
     }
+    esp_err_t ret = ESP_OK;
+    // if (!basepath){
+    //     ret = ESP_FAIL;
+    //     goto done;
+    // }
     if(esp_event_handler_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL)) {
         ELOG(TAG, "[%s] Failed to register event handler", __func__);
         ret = ESP_FAIL;
@@ -366,12 +371,13 @@ esp_err_t http_rest_init(const char *basepath) {
     }
     //strbf_t buf;
     //strbf_inits(&buf, base_path, ESP_VFS_PATH_MAX+1);
-    struct stat sb = {0};
-    int statok, i = 0;
+    // struct stat sb = {0};
+    // int statok, i = 0;
     //strbf_put_path(&buf, vfs_ctx.parts[vfs_ctx.gps_log_part].mount_point);
     //strbf_put_path(&buf, CONFIG_WEB_APP_PATH);
 
     //strbf_finish(&buf);
+    http_rest_initialized = true;
     ret = ESP_OK;
 done:
     return ret;

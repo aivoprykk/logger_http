@@ -36,9 +36,9 @@
 ESP_EVENT_DEFINE_BASE(OTA_AUTO_EVENT);
 
 #if (C_LOG_LEVEL <= LOG_INFO_NUM)
-static const char * const _ota_auto_event_strings[] = { OTA_AUTO_EVENT_LIST(STRINGIFY) };
+static const char * const _ota_auto_event_strings[] = { OTA_EVENT_LIST(STRINGIFY_) };
 const char * ota_auto_event_strings(int id) {
-    return _ota_auto_event_strings[id];
+    return id < lengthof(_ota_auto_event_strings) ? _ota_auto_event_strings[id] : "OTA_AUTO_EVENT_UNKNOWN";
 }
 #else
 const char * ota_auto_event_strings(int id) {return "OTA_AUTO_EVENT";}
@@ -81,8 +81,7 @@ static const char * const _http_ota_events [] = {
     "ESP_HTTPS_OTA_ABORT",                    /*!< OTA aborted */
 };
 const char * http_ota_event_strings(int id) {
-    if(id < 0 || id >= (sizeof(_http_ota_events)/sizeof(_http_ota_events[0]))) return "ESP_HTTPS_OTA_UNKNOWN";
-    return _http_ota_events[id];
+    return id < lengthof(_http_ota_events) ? _http_ota_events[id] : "ESP_HTTPS_OTA_UNKNOWN";
 }
 
 /* Event handler for catching system events */
