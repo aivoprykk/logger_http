@@ -685,7 +685,7 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, data_mode_t mode, str
         flush_d(req, "\"", data, flush_size);
     }
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
-    if(wifi_context.s_ap_connection) {
+    if(wifi_is_ap_ready()) {
         if(mode == DATA_MODE_HTML) { 
             flush_d(req, http_async_handler_strings[8], data, flush_size);
             flush_d(req, "Ap_ssid", data, flush_size);
@@ -703,20 +703,22 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, data_mode_t mode, str
             flush_d(req, "\"", data, flush_size);
         } 
     }
-    if(wifi_context.s_sta_connection) {
+    if(wifi_is_sta_connecting()) {
         if(mode == DATA_MODE_HTML) { 
             flush_d(req, http_async_handler_strings[8], data, flush_size);
             flush_d(req, "Sta_ssid", data, flush_size);
             flush_d(req, http_async_handler_strings[9], data, flush_size);
-        } else flush_d(req, ",\"sta_ssid\":\"", data, flush_size);
-        if(wifi_context.s_sta_got_ip)
+        } 
+        else flush_d(req, ",\"sta_ssid\":\"", data, flush_size);
+        if(wifi_is_sta_connected())
          flush_d(req, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, data, flush_size);
         if(mode == DATA_MODE_HTML) { 
             flush_d(req, http_async_handler_strings[8], data, flush_size);
             flush_d(req, "Sta_address", data, flush_size);
             flush_d(req, http_async_handler_strings[9], data, flush_size);
-        } else flush_d(req, "\",\"sta_address\":\"", data, flush_size);
-        if(wifi_context.s_sta_got_ip)
+        } 
+        else flush_d(req, "\",\"sta_address\":\"", data, flush_size);
+        if(wifi_is_sta_connected())
             llen = uint8_array_to_ipv4_string(wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address, &lbuf[0]);
         flush_d(req, lbuf, data, flush_size);
         if(mode != DATA_MODE_HTML) {
@@ -1792,8 +1794,12 @@ esp_err_t post_handler(httpd_req_t *req) {
                 // Single config item update
                 save_result = http_config_set_value(r, data.start, true);
             } else {
-                // Bulk JSON config updates
-                config_lock(-1);  // portMAX_DELAY
+                // Bulk JSON config updates - use reasonable timeout to avoid priority inversion blocking
+                if (!config_lock(1000)) {  // 1 second timeout instead of portMAX_DELAY
+                    ELOG(TAG, "Failed to acquire config lock for bulk update");
+                    err = -1;
+                    goto toerr;
+                }
                 save_result = http_config_set_bulk(data.start, true);
                 config_unlock();
             }

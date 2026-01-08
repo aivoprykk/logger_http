@@ -231,22 +231,11 @@ const char * http_client_events(int id) {
 static int output_len=0;       // Stores number of bytes read
 static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     int32_t id = evt->event_id;
+    FUNC_ENTRY_ARGS(TAG, "%s(%ld)", http_client_events(id), id);
     switch (id) {
         case HTTP_EVENT_ERROR:
-             FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
              break;
-        // case HTTP_EVENT_ON_CONNECTED:
-        //     FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
-        //     break;
-        // case HTTP_EVENT_HEADER_SENT:
-        //     FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
-        //     break;
-        // case HTTP_EVENT_ON_HEADER:
-        //     FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
-        //     printf("%.*s", evt->data_len, (char *)evt->data);
-        //     break;
         case HTTP_EVENT_ON_DATA:
-            FUNC_ENTRY_ARGS(TAG, "%s, len=%d", http_client_events(id), evt->data_len);
             if (output_len == 0 && evt->user_data) {
                 // ILOG(TAG, "[%s] Resetting user_data buffer", __func__);
                 // we are just starting to copy the output data into the use
@@ -264,16 +253,11 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
             }
             break;
         case HTTP_EVENT_ON_FINISH:
-            FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
             output_len = 0;
             break;
         case HTTP_EVENT_DISCONNECTED:
-            FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
             output_len = 0;
             break;
-        // case HTTP_EVENT_REDIRECT:
-        //     FUNC_ENTRY_ARGS(TAG, "%s", http_client_events(id));
-        //     break;
         default:
             break;
     }

@@ -42,6 +42,11 @@ extern struct context_s m_context;
 static const char *TAG = "http_server";
 
 httpd_handle_t *server = 0;
+// Task handle and state management for deferred HTTP server operations
+static TaskHandle_t http_server_task_handle = NULL;
+static volatile bool http_server_desired_state = false; // false=stop, true=start
+static volatile bool http_server_state_changed = false;
+
 uint8_t downloading_file = 0;
 bool http_rest_initialized = false;
 // char base_path[ESP_VFS_PATH_MAX + 1] = {0};
@@ -191,39 +196,137 @@ static esp_err_t deinitialise_mdns(void) {
     return ret;
 }
 
+// Unified task for HTTP server start/stop (prevents event loop blocking)
+// Processes state changes in a loop until reaching stable desired state
+// This handles rapid start→stop→start sequences without race conditions
+static void http_server_task(void *arg) {
+    // Loop until current state matches desired state
+    while (true) {
+        bool current_running = (server != NULL);
+        bool desired_running = http_server_desired_state;
+        
+        // Check if we've reached the desired state
+        if (current_running == desired_running && !http_server_state_changed) {
+            DLOG(TAG, "[http_server_task] Reached stable state (running=%d)", current_running);
+            break;
+        }
+        
+        http_server_state_changed = false;
+        
+        if (desired_running && !current_running) {
+            // Need to start server
+            ILOG(TAG, "[http_server_task] Starting HTTP server");
+            #if defined(X1)
+            start_async_req_workers();
+            #endif
+            server = start_webserver();
+            initialise_mdns();
+            
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
+            // Start OTA if STA is active and update is enabled
+            if (wifi_is_sta_connecting() && g_rtc_config.fw_update.update_enabled) {
+                ILOG(TAG, "[http_server_task] Starting OTA (STA active)");
+                https_ota_start();
+            }
+#endif
+        } else if (!desired_running && current_running) {
+            // Need to stop server
+            ILOG(TAG, "[http_server_task] Stopping HTTP server");
+            
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
+            // Stop OTA if update is enabled
+            if (g_rtc_config.fw_update.update_enabled) {
+                ILOG(TAG, "[http_server_task] Stopping OTA");
+                https_ota_stop();
+            }
+#endif
+            
+            deinitialise_mdns();
+            esp_err_t ret = stop_webserver(server);
+            if (!ret) {
+                server = NULL;
+            } else {
+                ELOG(TAG, "Failed to stop http server");
+            }
+            #if defined(X1)
+            stop_async_req_workers();
+            #endif
+        }
+        
+        // Small delay to allow state updates from events
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    
+    // Task cleanup
+    http_server_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
 esp_err_t http_start_webserver() {
     ILOG(TAG, "[%s]", __func__);
-    //httpd_handle_t server = s;
-    if (server == NULL) {
-        #if defined(X1)
-        start_async_req_workers();
-        #endif
-        server = start_webserver();
-        initialise_mdns();
+    
+    // Set desired state to running
+    http_server_desired_state = true;
+    http_server_state_changed = true;
+    
+    // If task already running, it will pick up the state change
+    if (http_server_task_handle != NULL) {
+        DLOG(TAG, "HTTP server task already running, updated desired state");
+        return ESP_OK;
     }
-    if(server) return ESP_OK;
-    else return ESP_FAIL;
+    
+    // If already running and no task, we're done
+    if (server != NULL) {
+        DLOG(TAG, "HTTP server already running");
+        return ESP_OK;
+    }
+    
+    // Create task to start server
+    BaseType_t ret = xTaskCreate(http_server_task, "http_srv", 4096, NULL, 3, &http_server_task_handle);
+    
+    if (ret != pdPASS) {
+        ELOG(TAG, "Failed to create HTTP server task");
+        http_server_task_handle = NULL;
+        return ESP_FAIL;
+    }
+    
+    DLOG(TAG, "HTTP server start deferred to background task");
+    return ESP_OK;
 }
 
 esp_err_t http_stop_webserver() {
     ILOG(TAG, "[%s]", __func__);
-    //httpd_handle_t server = s;
-    esp_err_t ret = ESP_OK;
-    if (server) {
-        deinitialise_mdns();
-        ret = stop_webserver(server);
-        if(!ret) {
-            server = NULL;
-        } else {
-            ELOG(TAG, "%s", http_rest_server_errors[1]);
-        }
-        #if defined(X1)
-        stop_async_req_workers();
-        #endif
+    
+    // Set desired state to stopped
+    http_server_desired_state = false;
+    http_server_state_changed = true;
+    
+    // If task already running, it will pick up the state change
+    if (http_server_task_handle != NULL) {
+        DLOG(TAG, "HTTP server task already running, updated desired state");
+        return ESP_OK;
     }
-    return ret;
+    
+    // If already stopped and no task, we're done
+    if (server == NULL) {
+        DLOG(TAG, "HTTP server already stopped");
+        return ESP_OK;
+    }
+    
+    // Create task to stop server
+    BaseType_t ret = xTaskCreate(http_server_task, "http_srv", 4096, NULL, 3, &http_server_task_handle);
+    
+    if (ret != pdPASS) {
+        ELOG(TAG, "Failed to create HTTP server task");
+        http_server_task_handle = NULL;
+        return ESP_FAIL;
+    }
+    
+    DLOG(TAG, "HTTP server stop deferred to background task");
+    return ESP_OK;
 }
 
+#if defined(HTTP_CONN_HANDLERS)
 void disconnect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     httpd_handle_t *server = (httpd_handle_t *)arg;
     if (*server) {
@@ -249,6 +352,7 @@ void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, v
         initialise_mdns();
     }
 }
+#endif
 #endif  // !CONFIG_IDF_TARGET_LINUX
 
 #if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
@@ -276,38 +380,7 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
     if(base == ESP_HTTP_SERVER_EVENT) {
         esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
  #if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
-       switch(id) {
-            case HTTP_SERVER_EVENT_ERROR: // 0
-                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
-                break;
-            case HTTP_SERVER_EVENT_START: // 1
-                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
-                break;
-            case HTTP_SERVER_EVENT_ON_CONNECTED: // 2
-                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
-                break;
-            case HTTP_SERVER_EVENT_ON_HEADER: // 3
-                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
-                break;
-            case HTTP_SERVER_EVENT_HEADERS_SENT: // 4
-                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
-                break;
-            case HTTP_SERVER_EVENT_ON_DATA: // 5
-                DLOG(TAG, "%s", ".");
-                break;
-            case HTTP_SERVER_EVENT_SENT_DATA: // 6
-                FUNC_ENTRY_ARGS(TAG, "-");
-                break;
-            case HTTP_SERVER_EVENT_DISCONNECTED: // 7
-                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
-                break;
-            case HTTP_SERVER_EVENT_STOP: // 8
-                FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
-                break;
-            default:
-                // FUNC_ENTRY_ARGS(TAG, "%s:%" PRId32, base, id);
-                break;
-        }
+        FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
 #endif
     }
 #if defined (CONFIG_LOGGER_WIFI_ENABLED)
@@ -317,14 +390,11 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
                 http_start_webserver();
                 break;
             case WIFI_EVENT_AP_STOP:
-                if (!wifi_context.s_sta_connection)
+                if (!wifi_is_sta_connecting())
                     http_stop_webserver();
                 break;
             case WIFI_EVENT_STA_STOP:
-#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
-                if(g_rtc_config.fw_update.update_enabled)
-                    https_ota_stop();
-#endif
+                // OTA stop is now handled by http_server_task when server stops
                 break;
             default:
                 break;
@@ -334,18 +404,10 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
                 http_start_webserver();
-#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
-                if(g_rtc_config.fw_update.update_enabled)
-                    https_ota_start();
-#endif
                 break;
             case IP_EVENT_STA_LOST_IP:
-                if (!wifi_context.s_ap_connection)
+                if (!wifi_is_ap_ready())
                     http_stop_webserver();
-    #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
-                if(g_rtc_config.fw_update.update_enabled)
-                    https_ota_stop();
-    #endif
                 break;
             default:
                 break;
