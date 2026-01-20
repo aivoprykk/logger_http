@@ -19,7 +19,7 @@ static const char* TAG = "fw_ota";
 ESP_EVENT_DEFINE_BASE(OTA_FW_EVENT);
 
 #if (C_LOG_LEVEL <= LOG_INFO_NUM)
-static const char * const _ota_fw_event_strings[] = { OTA_EVENT_LIST(STRINGIFY_) };
+static const char * const _ota_fw_event_strings[] = { OTA_EVENT_LIST(STRINGIFY) };
 const char * ota_fw_event_strings(int id) {
     return id < lengthof(_ota_fw_event_strings) ? _ota_fw_event_strings[id] : "OTA_FW_EVENT_UNKNOWN";
 }

@@ -87,6 +87,15 @@ static int http_config_set_value(const char *name, const char *json_value, bool 
         err = ESP_OK;
     }
     if (err == ESP_OK) {
+        // Save only the submodule containing this item (targeted save)
+        if (commit) {
+            if (config_manager_save_by_item_name(name)) {
+                DLOG(TAG, "Saved item %s to NVS", name);
+            } else {
+                ELOG(TAG, "Failed to save item %s", name);
+                return -1;
+            }
+        }
         return 0;
     }
     return -1;
@@ -151,16 +160,20 @@ static int http_config_set_bulk(const char *json, bool commit) {
 
         current = value_end + 1;
 
-        // Set the value without commit
+        // Set the value without commit (will batch save at end)
         if (http_config_set_value(key, value, false) != 0) return -1;
     }
 
     if (commit) {
+        // Save all modified submodules (bulk save)
         return config_manager_save() ? 0 : -1;
     }
     return 0;
 }
 
+#define OLDDD 1
+
+#if defined(CONFIG_WEB_SERVER_ASYNC_WORKER_ENABLED) && (CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 0)
 // Async reqeusts are queued here while they wait to
 // be processed by the workers
 static QueueHandle_t async_req_queue;
@@ -171,13 +184,11 @@ static SemaphoreHandle_t worker_ready_count = 0;
 // Each worker has its own thread
 static uint8_t worker_num = CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS;
 static TaskHandle_t worker_handles[CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS];
-#define OLDDD 1
 
-#if defined(X1)
 static uint8_t is_on_async_worker_thread(void) {
     // is our handle one of the known async handles?
     TaskHandle_t handle = xTaskGetCurrentTaskHandle();
-    uint8_t ret = false;
+    bool ret = false;
     for (int i = 0; i < worker_num; i++) {
         if (worker_handles[i] == handle) {
             FUNC_ENTRY_ARGS(TAG, "found on async worker thread num %d", i);
@@ -187,17 +198,17 @@ static uint8_t is_on_async_worker_thread(void) {
     }
     FUNC_ENTRY_ARGS(TAG, "Not on async worker thread");
     done:
-    return false;
+    return ret;
 }
 
 // Submit an HTTP req to the async worker queue
-static esp_err_t submit_async_req(httpd_req_t *req, httpd_req_handler_t handler) {
+static esp_err_t queue_request(httpd_req_t *req, httpd_req_handler_t handler) {
     FUNC_ENTRY(TAG);
     // must create a copy of the request that we own
     httpd_req_t *copy = NULL;
     esp_err_t err = httpd_req_async_handler_begin(req, &copy);
     if (err != ESP_OK) {
-        goto done;
+        return err;
     }
     httpd_async_req_t async_req = {
         .req = copy,
@@ -214,19 +225,21 @@ static esp_err_t submit_async_req(httpd_req_t *req, httpd_req_handler_t handler)
     if (xSemaphoreTake(worker_ready_count, ticks) == false) {
         ELOG(TAG, "No workers are available");
         httpd_req_async_handler_complete(copy);  // cleanup
-        err = ESP_FAIL;
-        goto done;
+        return ESP_FAIL;
     }
 
     // Since worker_ready_count > 0 the queue should already have space.
     // But lets wait up to 100ms just to be safe.
-    if (xQueueSend(async_req_queue, &async_req, pdMS_TO_TICKS(100)) == false) {
+    if (xQueueSend(async_req_queue, &async_req, pdMS_TO_TICKS(500)) == false) {
         ELOG(TAG, "worker queue is full");
         httpd_req_async_handler_complete(copy);  // cleanup
-        ret = ESP_FAIL;
+        return ESP_FAIL;
     }
-    done:
-    return ESP_OK;
+    return err;
+}
+#else
+static inline esp_err_t queue_request(httpd_req_t *req, httpd_req_handler_t handler) {
+    return handler(req);
 }
 #endif
 
@@ -432,20 +445,36 @@ static esp_err_t config_handler(httpd_req_t *req, const char *name, strbf_t * sb
     // const char *end_ptr = 0;
     if (name && *name) {
         while(name && *name=='/') ++name;
-        if (!config_manager_get_item_by_name(name, sb)) {
+        if(!strcmp(name, "reset_to_defaults")) {
+            if(config_manager_reset()) {
+                http_send_json_msg(req, "reset defaults done", 19, 0, 0, 0);
+            } else ret = ESP_FAIL;
+            goto done;
+        }
+        else if (!config_manager_get_item_by_name(name, sb)) {
             ret = ESP_FAIL;
             goto done;
         }
     } else {
         strbf_puts(sb, "[");
-        bool first = true;
-        for (int8_t group = SCFG_GROUP_COUNT-1; group >= 0; --group) {
-            printf("group %hhd processing\n", group);
+        bool firstingroups = true;
+        for (int8_t group = 0; group < SCFG_GROUP_COUNT; ++group) {
+            // printf("group %hhd processing\n", group);
             const size_t size = config_get_group_size(group);  // Cache size per group
+            bool firstingroup = true;
+            strbf_puts(sb, firstingroups ? "" : ",");
+            firstingroups = false;
+            strbf_puts(sb, "{\"group_id\":");
+            strbf_putn(sb,group);
+            strbf_puts(sb, ",\"default_hidden\":");
+            strbf_puts(sb, config_manager_is_group_default_hidden(group) ? "1" : "0");
+            strbf_puts(sb, ",\"group_name\":\"");
+            strbf_puts(sb, sconfig_group_names(group));
+            strbf_puts(sb, "\",\"items\":[");
             for (int8_t index = 0; index < size; ++index) {
-                printf("item %hhd of %u processing\n", index, size);
-                if (!first) strbf_putc(sb, ',');
-                first = false;
+                // printf("item %hhd of %u processing\n", index, size);
+                if (!firstingroup) strbf_putc(sb, ',');
+                firstingroup = false;
                 config_manager_get_item_by_group_idx(group, index, sb);
                 if(*(sb->cur-1) == ',') {
                     sb->cur--;
@@ -457,6 +486,7 @@ static esp_err_t config_handler(httpd_req_t *req, const char *name, strbf_t * sb
                     strbf_shape(sb, 0);
                 }
             }
+            strbf_puts(sb, "]}");
         }
         strbf_puts(sb, "]\n");
     }
@@ -537,7 +567,7 @@ static esp_err_t paths_handler(httpd_req_t *req, data_mode_t mode, strbf_t * dat
     char tbuffer[92] ={0};
     uint8_t i = 0;
     if(mode == DATA_MODE_JSON)
-        httpd_resp_send_chunk(req, "{\"paths\": [", 11);
+        flush_d(req, "{\"paths\": [", data, flush_size);
     while(i < VFS_MAX_PARTS) {
         if(vfs_ctx.parts[i].is_mounted) {
             if(i > 0) {
@@ -551,7 +581,7 @@ static esp_err_t paths_handler(httpd_req_t *req, data_mode_t mode, strbf_t * dat
             else {
                 if(mode == DATA_MODE_HTML)
                     flush_d(req, http_async_handler_strings[8], data, flush_size);
-                flush_d(req, "Storage", data, flush_size);
+                flush_d(req, "Store", data, flush_size);
                 if(mode == DATA_MODE_HTML)
                     flush_d(req, http_async_handler_strings[9], data, flush_size);
                 else
@@ -655,6 +685,9 @@ static esp_err_t system_info_get_handler(httpd_req_t *req, data_mode_t mode, str
         flush_d(req, http_async_handler_strings[9], data, flush_size);
     } else flush_d(req, ",\"minfreeheap\":", data, flush_size);
     strbf_putl(data, esp_get_minimum_free_heap_size());
+    if(mode != DATA_MODE_HTML) { 
+        flush_d(req, ",\"storage\":", data, flush_size);
+    }
     paths_handler(req, mode, data, flush_size);
     if(mode == DATA_MODE_HTML) { 
         flush_d(req, http_async_handler_strings[8], data, flush_size);
@@ -895,7 +928,8 @@ static esp_err_t http_resp_file_html_handler(httpd_req_t *req, const char *name,
     "<li class=\"brand\"><span class=\"lg\">ESP-LOGGER</span></ul><ul><li class=\"home\">"
     "<a href=\"/\">Home</a></li><li class=\"files\"><a href=\"/files.html\">"
     "Files</a></li><li class=\"config\"><a href=\"/config.html\">Config</a></li>"
-    "<li class=\"fwupdate\"><a href=\"/fwupdate.html\">FW Update</a></li></ul></nav></header>"
+    "<li class=\"fwupdate\"><a href=\"/fwupdate.html\">FW Update</a></li>"
+    "<li><a class=\"restart\" href=\"\">Restart</a></li></ul></nav></header>"
     "<main><div class=\"container\"><article class=\"card ", data, flush_size);
     flush_d(req, name, data, flush_size);
     flush_d(req, "\"><header class=\"card-header\"><div class=\"flexrow\">", data, flush_size);
@@ -909,7 +943,7 @@ static esp_err_t http_resp_file_html_handler(httpd_req_t *req, const char *name,
         "</div></div><div class=\"flexrow info\">", data, flush_size);
     }
     else if(!strcmp(name, "config")) {
-        flush_d(req, "<h2>Configuration</h2>", data, flush_size);
+        flush_d(req, "<h2>Configuration</h2><button class=\"right config-cmd-reset\">Reset to defaults</button>", data, flush_size);
     }
     else if(!strcmp(name, "fwupdate")) {
         flush_d(req, "<h2>Firmware update</h2>", data, flush_size);
@@ -1117,13 +1151,14 @@ esp_err_t add_cors(httpd_req_t *req, uint8_t api) {
     }
     if(api) {
         uint8_t tlen = 8;
-        if (strstr(req->uri+tlen, "files") == req->uri+tlen) {
-            err = httpd_resp_set_hdr(req, http_async_handler_strings[5], "GET, DELETE, POST");
+        const char * const uri = req->uri+tlen;
+        if (strstr(uri, "files") == uri || strstr(uri, "paths") == uri) {
+            err = httpd_resp_set_hdr(req, http_async_handler_strings[5], "GET, POST, DELETE");
             if (err != ESP_OK) {
                 ELOG(TAG, "%s", http_async_handler_status_strings[3]);
             }
-        } else if (strstr(req->uri+tlen, "config") == req->uri+tlen) {
-            err = httpd_resp_set_hdr(req, http_async_handler_strings[5], "GET, POST, OPTIONS, PATCH");
+        } else if (strstr(uri, "config") == uri) {
+            err = httpd_resp_set_hdr(req, http_async_handler_strings[5], "GET, POST, PATCH, OPTIONS");
             if (err != ESP_OK) {
                 ELOG(TAG, "%s", http_async_handler_status_strings[3]);
             }
@@ -1311,13 +1346,13 @@ static esp_err_t system_format_handler(httpd_req_t *req, strbf_t * data) {
     esp_err_t ret = ESP_OK;
     // Parse mountpoint from URI
     const char *uri = req->uri;
-    const char *mpb = strstr(uri, "/api/v1/path/format/");
+    const char *mpb = strstr(uri, "/api/v1/paths/format/");
     if (!mpb) {
         httpd_resp_set_status(req, HTTPD_400);
         http_send_json_msg(req, "Invalid URI", 11, 0, 0, 0);
         return ESP_FAIL;
     }
-    mpb += 19; // after "/api/v1/path/format", points "/mountpoint"
+    mpb += 20; // after "/api/v1/paths/format"[20], points "/mountpoint"
     int len = mpb ? strlen(mpb) : 0;
     if (len == 0 || len >= 64) {
         httpd_resp_set_status(req, HTTPD_400);
@@ -1331,7 +1366,12 @@ static esp_err_t system_format_handler(httpd_req_t *req, strbf_t * data) {
         return ESP_FAIL;
     }
     // Simple check for {"format":true}
-    if (strstr(data->start, "\"format\":true") != NULL) {
+    uri = strstr(data->start, "\"format\":");
+    if(uri){
+        uri += 9;
+        while(*uri==' ')++uri;
+    }
+    if (uri && strstr(uri, "true") == uri) {
 #ifdef CONFIG_USE_FATFS
             ret = fatfs_format(mpb);
             if (ret == ESP_OK) {
@@ -1543,9 +1583,13 @@ esp_err_t post_handler(httpd_req_t *req) {
                 mpb0 = strchr(mpb, '"') - 1;
             } else
                 mpb0 = buf + strlen(buf);
-            boundarylen = MIN(80, mpb0 - mpb);
-            memcpy(boundary, mpb, boundarylen);
-            boundary[boundarylen] = 0;
+            boundarylen = MIN(79, mpb0 - mpb);  // Leave room for null terminator
+            if (boundarylen > 0) {
+                memcpy(boundary, mpb, boundarylen);
+                boundary[boundarylen] = 0;
+            } else {
+                boundary[0] = 0;
+            }
             TLOG(TAG, "boundary found '%s' size '%" PRIu16 "'", boundary, boundarylen);
         }
     }
@@ -1556,7 +1600,8 @@ esp_err_t post_handler(httpd_req_t *req) {
     size_t tlen, ulen = strlen(req->uri);
     strbf_t data;
     strbf_init(&data);
-    struct end_result_s ota_result;
+    struct end_result_s ota_result = {0};
+    bool config_locked = false;
 
     if (u_mode == 1) {
         err = ota_start();
@@ -1752,7 +1797,7 @@ esp_err_t post_handler(httpd_req_t *req) {
         set_content_type_from_file(req, ".json", 5, &c);
         tlen = 8;
         mpb = req->uri + tlen;
-        if (strstr(mpb, "path/format/") == mpb) {
+        if (strstr(mpb, "paths/format/") == mpb) {
             system_format_handler(req, &data);
             goto done;
         }
@@ -1800,8 +1845,10 @@ esp_err_t post_handler(httpd_req_t *req) {
                     err = -1;
                     goto toerr;
                 }
+                config_locked = true;
                 save_result = http_config_set_bulk(data.start, true);
                 config_unlock();
+                config_locked = false;
             }
 
             if (save_result == 0) {
@@ -1821,6 +1868,11 @@ esp_err_t post_handler(httpd_req_t *req) {
         }
         if (err < 0) {
     toerr:
+        // Ensure config lock is released on error path
+        if (config_locked) {
+            config_unlock();
+            config_locked = false;
+        }
         ELOG(TAG, "[%s] Request failed.", __FUNCTION__);
         http_send_json_msg(req, "Could not finish.", 17, 1, 0, 0);
     } else
@@ -1843,7 +1895,43 @@ done:
 
 #undef FIND_B
 #undef GOMP_S
-#if defined(X1)
+
+esp_err_t long_api_handler(httpd_req_t *req) {
+    // add to the async request queue
+    if (queue_request(req, api_handler) == ESP_OK) {
+        task_memory_info(__func__);
+        return ESP_OK;
+    } else {
+        return api_handler(req);
+        task_memory_info(__func__);
+        return ESP_OK;
+    }
+}
+
+esp_err_t long_post_handler(httpd_req_t *req) {
+    // add to the async request queue
+    if (queue_request(req, post_handler) == ESP_OK) {
+        task_memory_info(__func__);
+        return ESP_OK;
+    } else {
+        return post_handler(req);
+        task_memory_info(__func__);
+        return ESP_OK;
+    }
+}
+
+esp_err_t long_get_handler(httpd_req_t *req) {
+    // add to the async request queue
+    if (queue_request(req, get_handler) == ESP_OK) {
+        task_memory_info(__func__);
+        return ESP_OK;
+    } else {
+        return get_handler(req);
+    }
+}
+
+#if defined(CONFIG_WEB_SERVER_ASYNC_WORKER_ENABLED) && (CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 0)
+
 static void async_req_worker_task(void *p) {
     FUNC_ENTRY(TAG);
     uint16_t loops = 0;
@@ -1894,7 +1982,7 @@ void start_async_req_workers(void) {
         return;
     }
     // create queue
-    async_req_queue = xQueueCreate(3, sizeof(httpd_async_req_t));
+    async_req_queue = xQueueCreate(4, sizeof(httpd_async_req_t));
     if (async_req_queue == NULL) {
         ELOG(TAG, "Failed to create async_req_queue");
         if(worker_ready_count) {

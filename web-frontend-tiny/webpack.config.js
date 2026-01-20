@@ -22,7 +22,8 @@ module.exports = {
                         loader: 'sass-loader',
                         options: {
                             sassOptions: {
-                                silenceDeprecations: ['mixed-decls', 'color-functions', 'global-builtin', 'import'],
+                                silenceDeprecations: ['color-functions', 'global-builtin', 'import'],
+                                quietDeps: true,
                             }
                         }
                     }
@@ -92,5 +93,10 @@ module.exports = {
     devServer: {
         historyApiFallback: true,
     },
+    ignoreWarnings: [
+        {
+            message: /Deprecation Warning/
+        }
+    ],
 };
 

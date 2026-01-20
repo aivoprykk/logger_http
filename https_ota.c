@@ -87,33 +87,13 @@ const char * http_ota_event_strings(int id) {
 /* Event handler for catching system events */
 static void event_handler(void *arg, esp_event_base_t event_base, int32_t id, void *event_data) {
     if (event_base == ESP_HTTPS_OTA_EVENT) {
+        FUNC_ENTRY_ARGS(TAG, "%s", http_ota_event_strings(id));
         switch (id) {
-            case ESP_HTTPS_OTA_START:
-                FUNC_ENTRY_ARGS(TAG, " %s", http_ota_event_strings(id));
-                break;
-            case ESP_HTTPS_OTA_CONNECTED:
-                FUNC_ENTRY_ARGS(TAG, " %s", http_ota_event_strings(id));
-                break;
-            case ESP_HTTPS_OTA_GET_IMG_DESC:
-                FUNC_ENTRY_ARGS(TAG, " %s", http_ota_event_strings(id));
-                break;
-            case ESP_HTTPS_OTA_VERIFY_CHIP_ID:
-                FUNC_ENTRY_ARGS(TAG, " %s", http_ota_event_strings(id));
-                break;
-            case ESP_HTTPS_OTA_DECRYPT_CB:
-                FUNC_ENTRY_ARGS(TAG, " %s", http_ota_event_strings(id));
-                break;
             case ESP_HTTPS_OTA_WRITE_FLASH:
-                FUNC_ENTRY_ARGSD(TAG, "%s: %d written", http_ota_event_strings(id), *(int *)event_data);
+                FUNC_ENTRY_ARGSD(TAG, "%d written", *(int *)event_data);
                 break;
             case ESP_HTTPS_OTA_UPDATE_BOOT_PARTITION:
-                FUNC_ENTRY_ARGS(TAG, " %s. Next Partition: %d", http_ota_event_strings(id), *(esp_partition_subtype_t *)event_data);
-                break;
-            case ESP_HTTPS_OTA_FINISH:
-                FUNC_ENTRY_ARGS(TAG, " %s", http_ota_event_strings(id));
-                break;
-            case ESP_HTTPS_OTA_ABORT:
-                FUNC_ENTRY_ARGS(TAG, " %s", http_ota_event_strings(id));
+                FUNC_ENTRY_ARGS(TAG, "Next Partition: %d", *(esp_partition_subtype_t *)event_data);
                 break;
             default:
                 break;
@@ -148,28 +128,77 @@ static ota_check_result_t compare_app_version(const char *new_version, const cha
         const char * new_ptr=new_version, *old_ptr=old_version;
         int new_num = atoi(new_ptr), old_num = atoi(old_ptr);
         if(new_num > old_num) return OTA_CHECK_VERSION_MAJOR_AVAILABLE;
+        if(new_num < old_num) return OTA_CHECK_VERSION_CURRENT;  // Downgrade: reject
         
         new_ptr = strchr(new_ptr, '.'), old_ptr = strchr(old_ptr, '.');
         if(!new_ptr || !old_ptr) return OTA_CHECK_VERSION_STR_NOT_MATCH;
         if(++new_ptr) new_num = atoi(new_ptr);
         if(++old_ptr) old_num = atoi(old_ptr);
         if(new_num > old_num) return OTA_CHECK_VERSION_MINOR_AVAILABLE;
+        if(new_num < old_num) return OTA_CHECK_VERSION_CURRENT;  // Downgrade: reject
 
         new_ptr = strchr(new_ptr, '.'), old_ptr = strchr(old_ptr, '.');
         if(!new_ptr || !old_ptr) return OTA_CHECK_VERSION_STR_NOT_MATCH;
         if(++new_ptr) new_num = atoi(new_ptr);
         if(++old_ptr) old_num = atoi(old_ptr);
         if(new_num > old_num) return OTA_CHECK_VERSION_PATCH_AVAILABLE;
+        if(new_num < old_num) return OTA_CHECK_VERSION_CURRENT;  // Downgrade: reject
 
         new_ptr = strchr(new_ptr, '.'), old_ptr = strchr(old_ptr, '.');
         if(!new_ptr || !old_ptr) return OTA_CHECK_VERSION_STR_NOT_MATCH;
         if(++new_ptr) new_num = atoi(new_ptr);
         if(++old_ptr) old_num = atoi(old_ptr);
         if(new_num > old_num) return OTA_CHECK_VERSION_BUILD_AVAILABLE;
+        if(new_num < old_num) return OTA_CHECK_VERSION_CURRENT;  // Downgrade: reject
 
         return OTA_CHECK_VERSION_STR_NOT_MATCH;
     }
 }
+
+#ifdef COMPARE_APP_VERSION_SELFTEST
+static const char *ota_check_result_str(ota_check_result_t r) {
+    switch (r) {
+        case OTA_CHECK_VERSION_ERROR: return "ERROR";
+        case OTA_CHECK_VERSION_CURRENT: return "CURRENT";
+        case OTA_CHECK_VERSION_STR_NOT_MATCH: return "STR_NOT_MATCH";
+        case OTA_CHECK_VERSION_CHANNEL_CHANGED: return "CHANNEL_CHANGED";
+        case OTA_CHECK_VERSION_MAJOR_AVAILABLE: return "MAJOR_AVAILABLE";
+        case OTA_CHECK_VERSION_MINOR_AVAILABLE: return "MINOR_AVAILABLE";
+        case OTA_CHECK_VERSION_PATCH_AVAILABLE: return "PATCH_AVAILABLE";
+        case OTA_CHECK_VERSION_BUILD_AVAILABLE: return "BUILD_AVAILABLE";
+        case OTA_CHECK_VERSION_AVAILABLE: return "AVAILABLE";
+        default: return "UNKNOWN";
+    }
+}
+
+typedef struct {
+    const char *new_v;
+    const char *old_v;
+    ota_check_result_t expect;
+} compare_case_t;
+
+static void compare_app_version_selftest(void) {
+    const compare_case_t cases[] = {
+        {"1.0.5.0.dev", "1.0.5.0.dev", OTA_CHECK_VERSION_CURRENT},
+        {"1.1.0.0.dev", "1.0.5.0.dev", OTA_CHECK_VERSION_MAJOR_AVAILABLE},
+        {"1.0.6.0.dev", "1.0.5.0.dev", OTA_CHECK_VERSION_PATCH_AVAILABLE},
+        {"1.0.5.10.dev", "1.0.5.0.dev", OTA_CHECK_VERSION_BUILD_AVAILABLE},
+        // Downgrade case: new patch lower than current
+        {"1.0.4.25.dev", "1.0.5.0.dev", OTA_CHECK_VERSION_STR_NOT_MATCH},
+    };
+
+    for (size_t i = 0; i < lengthof(cases); ++i) {
+        ota_check_result_t r = compare_app_version(cases[i].new_v, cases[i].old_v);
+        bool pass = (r == cases[i].expect);
+        WLOG(TAG, "[compare_app_version_selftest] new=%s old=%s -> got=%s (%d) expect=%s (%d) %s",
+            cases[i].new_v,
+            cases[i].old_v,
+            ota_check_result_str(r), r,
+            ota_check_result_str(cases[i].expect), cases[i].expect,
+            pass ? "PASS" : "FAIL");
+    }
+}
+#endif
 
 static ota_check_result_t validate_image_header(esp_app_desc_t *new_app_info) {
     FUNC_ENTRY(TAG);
@@ -206,7 +235,7 @@ static ota_check_result_t validate_image_header(esp_app_desc_t *new_app_info) {
     return res;
 }
 
-#if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
 static const char * const _http_client_events [] = {
     "HTTP_EVENT_ERROR",
     "HTTP_EVENT_ON_CONNECTED",
@@ -217,8 +246,9 @@ static const char * const _http_client_events [] = {
     "HTTP_EVENT_DISCONNECTED",
     "HTTP_EVENT_REDIRECT",
 };
+static const size_t _http_client_events_count = sizeof(_http_client_events) / sizeof(_http_client_events[0]);
 const char * http_client_events(int id) {
-    return _http_client_events[id];
+    return id < (int)_http_client_events_count ? _http_client_events[id] : "HTTP_EVENT";
 }
 #else
 const char * http_client_events(int id) {
@@ -226,7 +256,7 @@ const char * http_client_events(int id) {
 }
 #endif
 
-#define LOCAL_BUF_LEN 16
+#define LOCAL_BUF_LEN 64
 // static char *output_buffer=0;  // Buffer to store response of http request from event handler
 static int output_len=0;       // Stores number of bytes read
 static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
@@ -265,6 +295,23 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
 }
 
 static char local_response_buffer[LOCAL_BUF_LEN] = {0};
+static char version_url[OTA_URL_SIZE] = {0};  // Built per-request and cached for reuse
+static char placeholder_url[OTA_URL_SIZE] = {0};  // Placeholder URL for client init
+size_t version_url_len = 0;
+
+RTC_DATA_ATTR uint64_t last_check = 0, next_check = 0;
+static uint8_t ota_task_started = 0;
+static TaskHandle_t ota_task_handle = NULL;  // Handle to wake task on stop
+
+#ifdef CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
+#define OTA_URI "http://" OTA_URI_BASE
+#else
+#define OTA_URI "https://" OTA_URI_BASE
+#endif
+
+// Forward declare URL builder
+static esp_err_t build_version_url(void);
+
 static esp_http_client_config_t config = {
     .keep_alive_enable = true,
     .timeout_ms = CONFIG_OTA_RECV_TIMEOUT,
@@ -276,55 +323,52 @@ static esp_http_client_config_t config = {
 #endif
 };
 
-#ifdef CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
-#define OTA_URI "http://" OTA_URI_BASE
-#else
-#define OTA_URI "https://" OTA_URI_BASE
-#endif
+/**
+ * @brief Build version check URL based on update channel
+ */
+static esp_err_t build_version_url(void) {
+    int i = snprintf(version_url, OTA_URL_SIZE, OTA_URI"_%sstable",
+        (g_rtc_config.fw_update.update_channel == FW_UPDATE_CHANNEL_DEV) ? "un" : ""
+    );
+    if (i < 0 || (size_t)i >= OTA_URL_SIZE) {
+        ELOG(TAG, "[%s] URL buffer overflow", __func__);
+        return ESP_ERR_NO_MEM;
+    }
+    version_url_len = (size_t)i;
+    FUNC_ENTRY_ARGS(TAG, "url:%s len:%u", version_url, version_url_len);
+    return ESP_OK;
+}
 
-static char version_url[OTA_URL_SIZE] = {0};
-size_t version_url_len = 0;
 static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
     FUNC_ENTRY(TAG);
     if (!ota_url) {
         return ESP_ERR_INVALID_ARG;
     }
     esp_err_t ret = ESP_OK;
-#ifdef AAAAA
-    memset(local_response_buffer, 0, LOCAL_BUF_LEN);
-    version_url_len = sizeof(OTA_URI) - 1;
-    memcpy(&version_url[0], OTA_URI, version_url_len);
-    version_url[version_url_len++] = '_'
-    if(g_rtc_config.fw_update.update_channel == FW_UPDATE_CHANNEL_DEV) {
-        memcpy(&version_url[version_url_len], "un", 2),version_url_len += 2;
-    }
-    memcpy(&version_url[version_url_len], "stable", 7),version_url_len += 7;
-    version_url[version_url_len] = 0;
-#else
-    int i = snprintf(version_url, OTA_URL_SIZE, OTA_URI"_%sstable",
-        (g_rtc_config.fw_update.update_channel == FW_UPDATE_CHANNEL_DEV) ? "un" : ""
-    );
-    if (i < 0 || (size_t)i >= ota_url_size) {
-        return ESP_ERR_NO_MEM;
-    }
-    version_url_len = (size_t)i;
-#endif
-    esp_http_client_config_t local_config = config;
-    local_config.url = &version_url[0];
-    FUNC_ENTRY_ARGS(TAG,"URL: %s %u\n", local_config.url, version_url_len);
-    local_config.event_handler = _http_event_handler;
-    local_config.user_data = local_response_buffer;        // Pass address of local buffer to get response
 
-    esp_http_client_handle_t client = esp_http_client_init(&local_config);
-    if (!client) {
-        ELOG(TAG, "[%s] esp_http_client_init returned NULL", __func__);
-        return ESP_ERR_NO_MEM;
+    // Build version URL for this request
+    esp_err_t url_err = build_version_url();
+    if (url_err != ESP_OK) {
+        return url_err;
     }
+    // Create a fresh HTTP client for this request to avoid reuse issues
+    esp_http_client_config_t vcfg = config;
+    vcfg.url = version_url;
+    vcfg.event_handler = _http_event_handler;
+    vcfg.user_data = local_response_buffer;
+    esp_http_client_handle_t client = esp_http_client_init(&vcfg);
+    if (!client) {
+        ELOG(TAG, "[%s] Failed to init http client", __func__);
+        return ESP_FAIL;
+    }
+
+    memset(local_response_buffer, 0, LOCAL_BUF_LEN);
+    output_len = 0;
     esp_err_t err = esp_http_client_perform(client);
     if (err == ESP_OK) {
-        uint32_t wait_until = get_millis() + 5000;
+        uint32_t wait_until = get_millis() + 5000; // 5 seconds timeout
         while(!esp_http_client_is_complete_data_received(client)) {
-            delay_ms(200);
+            vTaskDelay(pdMS_TO_TICKS(100));
             if(get_millis() >= wait_until) {
                 ELOG(TAG, "HTTP GET request complete timeout...");
                 ret = ESP_ERR_TIMEOUT;
@@ -386,11 +430,9 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
         ELOG(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
     }
     done:
-    if(client) {
+    if (client) {
         esp_http_client_cleanup(client);
     }
-    config.event_handler = 0;
-    config.user_data = 0;
     return ret;
 }
 
@@ -399,6 +441,28 @@ static esp_err_t _http_client_init_cb(esp_http_client_handle_t http_client) {
     /* Uncomment to add custom headers to HTTP request */
     // err = esp_http_client_set_header(http_client, "Custom-Header", "Value");
     return err;
+}
+
+#define FW_ALLOW_WAIT_SLICE_MS 200
+static bool wait_for_fw_permission(uint32_t deadline_ms) {
+    while (!m_context.fw_update_is_allowed) {
+        if (!ota_task_started || m_context.fw_update_postponed) {
+            return false;
+        }
+        uint32_t now = get_millis();
+        if (now >= deadline_ms) {
+            return false;
+        }
+        uint32_t slice_ms = deadline_ms - now;
+        if (slice_ms > FW_ALLOW_WAIT_SLICE_MS) {
+            slice_ms = FW_ALLOW_WAIT_SLICE_MS;
+        }
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(slice_ms))) {
+            // Stop notification received
+            return false;
+        }
+    }
+    return true;
 }
 
 static esp_err_t ota_get_task(void *pvParameter) {
@@ -421,9 +485,11 @@ static esp_err_t ota_get_task(void *pvParameter) {
             goto ota_fail_no_msg;
         }
 
-        config.url = img_url;
+        // Build a per-download HTTP config without mutating global config
+        esp_http_client_config_t dl_http_cfg = config;
+        dl_http_cfg.url = img_url;
         esp_https_ota_config_t ota_config = {
-            .http_config = &config,
+            .http_config = &dl_http_cfg,
             .http_client_init_cb =
                 _http_client_init_cb,  // Register a callback to be invoked after esp_http_client is initialized
 #ifdef CONFIG_OTA_ENABLE_PARTIAL_HTTP_DOWNLOAD
@@ -456,15 +522,14 @@ static esp_err_t ota_get_task(void *pvParameter) {
         esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_AVAILABLE, NULL,0, portMAX_DELAY);
 
         // m_context.firmware_update_started = 2;
-        delay_ms(100);
+        vTaskDelay(pdMS_TO_TICKS(100));
         
         wait_until = get_millis() + 60000;
-        while(!m_context.fw_update_is_allowed) {
-            delay_ms(100);
-            if(get_millis() >= wait_until || m_context.fw_update_postponed) {
+        if (!wait_for_fw_permission(wait_until)) {
+            if (ota_task_started) {
                 WLOG(TAG, "Firmware update not allowed by user...");
-                goto ota_cancel;
             }
+            goto ota_cancel;
         }
         esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_START, NULL,0, portMAX_DELAY);
         while (1) {
@@ -516,31 +581,46 @@ static esp_err_t ota_get_task(void *pvParameter) {
     goto ota_done;
 }
 
-RTC_DATA_ATTR uint64_t last_check = 0, next_check=0;
-static uint8_t ota_task_started = 0;
-
 void ota_task(void *pvParameter) {
     FUNC_ENTRY(TAG);
-    next_check = esp_timer_get_time() + 10000000ULL; // 10 sec
     esp_err_t ret = ESP_OK;
-    FUNC_ENTRY_ARGS(TAG, "Starting OTA task, interval: %llu", (CONFIG_OTA_CHECK_INTERVAL*1000ULL/1000000ULL));
+    uint32_t check_interval_ms = SEC_TO_MS(CONFIG_OTA_CHECK_INTERVAL) * 60UL; // Convert minutes to milliseconds
+    ILOG(TAG, "Starting OTA task, check interval: %lu ms", check_interval_ms);
+
+    // Initial delay before first check
+    vTaskDelay(pdMS_TO_TICKS(SEC_TO_MS(10)));
+    
     while (ota_task_started) {
-        if (next_check < esp_timer_get_time()) {
-            ota_get_task(pvParameter);
-            last_check = esp_timer_get_time();
-            next_check = last_check + ((CONFIG_OTA_CHECK_INTERVAL)*1000ULL);
+        ota_get_task(pvParameter);
+
+        if (!ota_task_started) {
+            break;
         }
-        delay_ms(10000);
+        
+        // Block for the check interval or until notified to stop
+        // ulTaskNotifyTake returns non-zero if notified, zero if timeout
+        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(check_interval_ms));
+        if (notified) {
+            // Task was notified to stop immediately
+            DLOG(TAG, "OTA task stop notification received");
+            break;
+        }
     }
-#if C_LOG_LEVEL <= LOG_INFO_NUM
-    esp_event_handler_unregister(ESP_HTTPS_OTA_EVENT, ESP_EVENT_ANY_ID, &event_handler);
-#endif
     vTaskDelete(NULL);
 }
 
 void https_ota_start() {
     FUNC_ENTRY(TAG);
     esp_err_t err = 0;
+
+    // Build version URL once at startup
+    if (build_version_url() != ESP_OK) {
+        ELOG(TAG, "[%s] Failed to build version URL", __func__);
+        return;
+    }
+
+    // No cached client; we create and cleanup per request
+
 #if C_LOG_LEVEL <= LOG_INFO_NUM
     esp_event_handler_register(ESP_HTTPS_OTA_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL);
 #endif
@@ -567,16 +647,27 @@ void https_ota_start() {
     if (xMutex == NULL)
         xMutex = xSemaphoreCreateMutex();
     ota_task_started = 1;
-    xTaskCreatePinnedToCore(&ota_task, "ota_task", CONFIG_OTA_AUTO_UPDATE_TASK_STACK_SIZE, NULL, 3, NULL, 0);
+    xTaskCreatePinnedToCore(&ota_task, "ota_task", CONFIG_OTA_AUTO_UPDATE_TASK_STACK_SIZE, NULL, 3, &ota_task_handle, 0);
 }
 
 void https_ota_stop() {
     FUNC_ENTRY(TAG);
+    ota_task_started = 0;
+
+    // Wake OTA task immediately to exit any pending delay
+    if (ota_task_handle) {
+        xTaskNotifyGive(ota_task_handle);
+        ota_task_handle = NULL;
+    }
+#if C_LOG_LEVEL <= LOG_INFO_NUM
+    esp_event_handler_unregister(ESP_HTTPS_OTA_EVENT, ESP_EVENT_ANY_ID, &event_handler);
+#endif
+
     if (xMutex != NULL){
         vSemaphoreDelete(xMutex);
         xMutex = NULL;
     }
-    ota_task_started = 0;
+    // No cached HTTP client to cleanup
 }
 
 #endif

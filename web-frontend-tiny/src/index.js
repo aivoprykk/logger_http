@@ -12,22 +12,39 @@
             window.app.config.init();
             window.app.home.init();
             window.app.fileupload.init();
-            console.log('Hello from ' + win.location.href);
-            var el = document.createElement('dialog');
-            el.innerHTML = '<article><h3>Confirm your action!</h3><p>Are you sure you want to delete the item?</p><footer><button class="secondary outline cancel" href="#cancel" role="button">Cancel</button><button class="outline ok" href="#confirm" role="button">Proceed</button><footer></article>';
-            document.body.appendChild(el);
+            var d = document.createElement('dialog');
+            d.innerHTML = '<article><h3>Confirm your action!</h3><p class="msg"></p><footer><button class="secondary outline cancel" href="#cancel" role="button">Cancel</button><button class="outline ok" href="#confirm" role="button">Proceed</button><footer></article>';
+            document.body.appendChild(d);
             var closebtn = document.querySelector('dialog .cancel');
-            if (el) {
+            if (d) {
                 closebtn.addEventListener('click', function () {
-                    el.close();
+                    d.close();
                     return false;
                 });
             }
-            el = document.querySelector('nav .brand');
+            var el = document.querySelector('nav .brand');
             var a = document.createElement('span');
             a.className = 'sm';
             a.innerHTML = 'GPS';
             el.appendChild(a);
+            a = document.querySelectorAll('header nav li .restart');
+            if (a) {
+                a.forEach(function (el) {
+                    el.addEventListener('click', function (e) {
+                        win.app.dlg(function() {
+                            var cb = function (resp) {
+                                if (!resp) {
+                                    win.app.snackbar.show('System restarting...');
+                                }
+                                win.app.snackbar.show('Restart command failed.');
+                            };
+                            win.app.load('/api/v1/system/restart', 'text', cb.bind(self));
+                            return false;
+                        }, 'Reboot?');
+                        e.preventDefault();
+                    });
+                });
+            }
         },
         mkmenuactive: function (cl) {
             var i, j;
@@ -210,25 +227,35 @@
             show: function (msg) {
                 var self = win.app.snackbar, x = self.el, y;
                 if (x) {
+                    if (self.currentTimeout) {
+                        clearTimeout(self.currentTimeout);
+                        self.currentTimeout = null;
+                    }
                     y = x.querySelector('.msg');
                     y.innerHTML = msg;
-                    x.className += ' ' + self.showclass;
+                    x.classList.add(self.showclass);
                     x.removeAttribute('hidden');
-                    setTimeout(function () {
-                        x.className = x.className.replace(self.showclass, '');
+                    self.currentTimeout = setTimeout(function () {
+                        x.classList.remove(self.showclass);
                         y.innerHTML = '';
+                        self.currentTimeout = null;
                     }, self.timeout);
                 }
             },
             hide: function () {
                 var self = win.app.snackbar, x = self.el;
                 if (x) {
-                    x.className = x.className.replace(self.showclass, '');
+                    x.classList.remove(self.showclass);
+                }
+                if (self.currentTimeout) {
+                    clearTimeout(self.currentTimeout);
+                    self.currentTimeout = null;
                 }
             },
             showclass: 'open',
-            timeout: 2000,
+            timeout: 3000,
             el: null,
+            currentTimeout: null,
         },
         fw: {
             data: {},
@@ -244,16 +271,25 @@
                 }
             },
             upload: function (e) {
-                var self = win.app.fw;
+                // Disable navigation during upload
+                var nav = document.querySelector('nav');
+                if (nav) nav.style.pointerEvents = 'none';
                 var cb = function (resp) {
+                    var text = '';
                     if (!resp) {
-                        win.app.snackbar.show('Upload failed');
+                        text = 'Upload failed';
+                        win.app.snackbar.show(text);
+                        if (nav) nav.style.pointerEvents = 'auto';
                     } else {
-                        win.app.snackbar.show('Success');
-                        self.get();
+                        text = 'Firmware uploaded. Restarting device...';
+                        win.app.snackbar.show(text);
                     }
+                    var uploadEl = document.querySelector('.upload-file');
+                    if (uploadEl) {
+                        uploadEl.innerHTML = '<p>' + text + '</p>';
+                    }
+                    history.replaceState(null, '', '/');
                 };
-                console.log('Upload file /api/v1/fw/update');
                 win.app.fileupload.upload('/api/v1/fw/update', cb);
                 e.preventDefault();
             },
@@ -268,7 +304,6 @@
                     return;
                 }
                 slot.innerHTML = d.version;
-                console.log(d.version);
             },
             get: function () {
                 var self = win.app.fw;
@@ -313,7 +348,20 @@
                     td.innerHTML = String(key).charAt(0).toUpperCase() + String(key).slice(1);
                     tr.appendChild(td);
                     td = document.createElement('td');
-                    td.innerHTML = d[key];
+                    if(Object.prototype.toString.call(d[key]) === '[object Object]') {
+                        if(key === 'storage') {
+                            var paths = d[key].paths;
+                            if(paths) {
+                                paths.forEach(function(k, l) {
+                                    var pre = document.createElement('span');
+                                    pre.innerHTML = (l > 0 ? '<br>' : '') + k.path.substr(1) + ' ' + win.app.size(k.total_space) + ' / ' + win.app.size(k.free_space);
+                                    td.appendChild(pre);
+                                });
+                            }
+                        }
+                    } else {
+                        td.innerHTML = d[key];
+                    }
                     tr.appendChild(td);
                     t.appendChild(tr);
                 }
@@ -323,7 +371,6 @@
                 var self = win.app.home;
                 var callback = function (resp) {
                     if (!resp) {
-                        console.log('Error on loading index');
                         return;
                     }
                     self.data = resp;
@@ -389,21 +436,18 @@
                 var cb = function (resp) {
                     if (!resp) {
                         win.app.snackbar.show('Upload failed');
-                        console.log('Error on uploading file');
                     } else {
                         win.app.snackbar.show('Success');
-                        console.log('Uploaded file');
                         self.get(self.path, true);
                     }
                 };
-                console.log('Upload file' + self.path);
                 win.app.fileupload.upload('/api/v1/files/' + self.path, cb);
                 e.preventDefault();
             },
             render: function () {
                 var self = win.app.files;
                 if (!self || !self.data) return;
-                var f = document.querySelector('.files .info'), g, e;
+                var f = document.querySelector('.files .info'), g, h, e;
                 var d = self.data, i, j, p, q;
                 var tr = null, td = null, a = null;
                 if (f) {
@@ -416,12 +460,13 @@
                         }
                     }
                     a = document.createElement('div');
-                    g = document.createElement('span');
+                    g = document.createElement('fieldset');
                     a.appendChild(g);
                     a.className = 'left';
                     g.className = 'path';
-                    g.appendChild(document.createTextNode('Path: '));
-                    g.innerHTML = 'Path: ';
+                    h = document.createElement('label');
+                    h.innerHTML = 'Path: ';
+                    g.appendChild(h);
                     p = self.path.split('/');
                     q = '';
                     if (paths && paths.length > 1) {
@@ -437,27 +482,27 @@
                             self.get(e.target.value, true);
                         });
                         g.appendChild(e);
-                    }
-                    for (i = 0, j = p.length; i < j; i++) {
-                        if (i == p.length - 1) {
-                            g.appendChild(document.createTextNode('/' + p[i]));
-                        } else {
-                            e = document.createElement('a');
-                            e.href = '#';
-                            e.innerHTML = p[i];
-                            g.appendChild(document.createTextNode('/'));
-                            g.appendChild(e);
-                            q += '/';
-                            q += p[i];
-                            e.addEventListener('click', function (num, path) {
-                                return function (e) {
-                                    self.get(num == 0 ? '' : path);
-                                    e.preventDefault();
-                                    return false;
-                                };
-                            }(i, q));
+                    } else {
+                        for (i = 0, j = p.length; i < j; i++) {
+                            if (i == p.length - 1) {
+                                g.appendChild(document.createTextNode('/' + p[i]));
+                            } else {
+                                e = document.createElement('a');
+                                e.href = '#';
+                                e.innerHTML = p[i];
+                                g.appendChild(document.createTextNode('/'));
+                                g.appendChild(e);
+                                q += '/';
+                                q += p[i];
+                                e.addEventListener('click', function (num, path) {
+                                    return function (e) {
+                                        self.get(num == 0 ? '' : path);
+                                        e.preventDefault();
+                                        return false;
+                                    };
+                                }(i, q));
+                            }
                         }
-
                     }
                     a.appendChild(g);
                     a.appendChild(document.createTextNode(' '));
@@ -492,6 +537,28 @@
                         g.innerHTML = win.app.size(pathselected.total_space);
                         a.appendChild(g);
                         f.appendChild(a);
+                        a.appendChild(document.createTextNode(' '));
+                        g = document.createElement('button');
+                        g.className = 'format outline';
+                        g.innerHTML = 'Format';
+                        a.addEventListener('click', function (s, p) {
+                            return function (e) {
+                                win.app.dlg(function() {
+                                    var cb = function (resp) {
+                                        if (!resp) {
+                                            win.app.snackbar.show('Failed to format');
+                                            return;
+                                        }
+                                        win.app.snackbar.show('Format done');
+                                        s.get();
+                                    };
+                                    win.app.load('/api/v1/paths/format'+ ((p.indexOf('/') == 0) ? '' : '/') + p, 'json', cb.bind(s), '{"format": true}');
+                                }, 'Format ' + p + '?');
+                                e.preventDefault();
+                            };
+                        }(self, pathselected.path));
+                        a.appendChild(g);
+
                     }
                 }
                 if (d.data && Array.isArray(d.data) && d.data.length > 0) {
@@ -586,7 +653,6 @@
                         a.href = name;
                         a.addEventListener('click', function (file, n) {
                             return function (e) {
-                                console.log('Download ' + n);
                                 if (file.type === 'f') {
                                     e.target.href = baseuri + '/' + self.path + '/' + n;
                                     return true;
@@ -623,7 +689,6 @@
                             win.app.showsvg(a, 'M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z', 'var(--pico-primary)', 24, 24);
                             a.addEventListener('click', function (file) {
                                 return function (e) {
-                                    console.log('Remove ' + file);
                                     self.sendcmd(file, 'delete');
                                     e.preventDefault();
                                 };
@@ -634,7 +699,6 @@
                             win.app.showsvg(a, 'm480-240 160-160-56-56-64 64v-168h-80v168l-64-64-56 56 160 160ZM200-640v440h560v-440H200Zm0 520q-33 0-56.5-23.5T120-200v-499q0-14 4.5-27t13.5-24l50-61q11-14 27.5-21.5T250-840h460q18 0 34.5 7.5T772-811l50 61q9 11 13.5 24t4.5 27v499q0 33-23.5 56.5T760-120H200Zm16-600h528l-34-40H250l-34 40Zm264 300Z', 'var(--pico-primary)', 24, 24);
                             a.addEventListener('click', function (file) {
                                 return function (e) {
-                                    console.log('Archive ' + file);
                                     self.sendcmd(file, 'archive');
                                     e.preventDefault();
                                 };
@@ -651,10 +715,7 @@
             getpaths() {
                 var self = win.app.files;
                 var callback = function (resp) {
-                    if (!resp) {
-                        console.log('Error on loading paths');
-                    }
-                    else if (resp && resp.paths && Array.isArray(resp.paths)) {
+                    if (resp && resp.paths && Array.isArray(resp.paths)) {
                         self.paths = resp.paths;
                     }
                     self.get();
@@ -675,7 +736,6 @@
                 var self = win.app.files;
                 var callback = function (resp) {
                     if (!resp) {
-                        console.log('Error on loading files');
                         return;
                     }
                     if (resp && resp.path && Array.isArray(resp.data)) {
@@ -698,32 +758,41 @@
             },
             sendcmd(name, action) {
                 var self = win.app.files;
-                var dialog = document.querySelector('dialog');
-                if (dialog) {
-                    var okbtn = document.querySelector('dialog .ok');
-                    var f = function (l) {
-                        return function () {
-                            dialog.close();
-                            if (l) l.remove();
-                            var callback = function (resp) {
-                                if (!resp) {
-                                    console.log('Error on ' + action + ' file');
-                                    win.app.snackbar.show('Failed ' + action);
-                                    return;
-                                }
-                                console.log(action + ' file done');
-                                win.app.snackbar.show(action + 'd');
-                                self.get(self.path, true);
-                            };
-                            if (name[0] !== '/' && name.indexOf('|') < 0) name = self.mkpath('/', name);
-                            win.app.load('/api/v1/files/' + action, 'json', callback.bind(self), '{"name":"' + name + '"}');
-                            return false;
-                        };
+                win.app.dlg(function() {
+                    var cb = function (resp) {
+                        if (!resp) {
+                            win.app.snackbar.show('Failed ' + action);
+                            return;
+                        }
+                        win.app.snackbar.show(action + 'd');
+                        self.get(self.path, true);
                     };
-                    var listener = okbtn.addEventListener('click', f(listener));
-                    dialog.removeAttribute('hidden');
-                    dialog.showModal();
-                }
+                    if (name[0] !== '/' && name.indexOf('|') < 0) name = self.mkpath('/', name);
+                    win.app.load('/api/v1/files/' + action, 'json', cb.bind(self), '{"name":"' + name + '"}');
+                    return false;
+                }, 'Really ' + action + '?');
+            }
+        },
+        dlg(fn, msg) {
+            var dialog = document.querySelector('dialog');
+            if (dialog) {
+                var okl = null;
+                var f = function () {
+                    return function () {
+                        if(okl) okl.remove();
+                        dialog.close();
+                        fn();
+                        return false;
+                    };
+                };
+                var msgsel = dialog.querySelector('.msg');
+                if(msgsel)
+                    msgsel.innerHTML = msg ? msg : 'Are you sure?';
+                var okbtn = dialog.querySelector('.ok');
+                if(okbtn)
+                    okbtn.addEventListener('click', f());
+                dialog.removeAttribute('hidden');
+                dialog.showModal();
             }
         },
         config: {
@@ -735,12 +804,30 @@
                     win.app.curobj = self;
                     self.get();
                 }
+                var a = document.querySelector('.config .card-header .config-cmd-reset');
+                if(a) {
+                    a.addEventListener('click', function () {
+                        return function (e) {
+                            win.app.dlg(function() {
+                                var cb = function (resp) {
+                                    if (!resp) {
+                                        win.app.snackbar.show('Failed to reset');
+                                        return;
+                                    }
+                                    win.app.snackbar.show('Reset done');
+                                    self.get();
+                                };
+                                win.app.load('/api/v1/config/reset_to_defaults', 'json', cb.bind(self));
+                            }, 'Reset config?');
+                            e.preventDefault();
+                        };
+                    }(self));
+                }
             },
             get: function () {
                 var self = win.app.config;
                 var callback = function (resp) {
                     if (!resp) {
-                        console.log('Error on loading config');
                         return;
                     }
                     if (resp && resp && Array.isArray(resp)) {
@@ -754,11 +841,9 @@
                 var self = win.app.config, cur = null, data = '', val = value;
                 var callback = function (resp) {
                     if (!resp) {
-                        console.log('Error on saving config');
                         win.app.snackbar.show('Failed save');
                         return;
                     }
-                    console.log('Saved config');
                     if (resp && resp.data && Array.isArray(resp.data)) {
                         self.data = resp.data;
                         self.render();
@@ -767,13 +852,7 @@
                     }
                     win.app.snackbar.show('Saved');
                 };
-                for (var i = 0, j = self.data.length, el = null; i < j; ++i) {
-                    el = self.data[i];
-                    if (el.name === name) {
-                        cur = el;
-                        break;
-                    }
-                }
+                cur = self.find_in_data(name);
                 if (!cur) return;
                 data = '{"name":"' + name + '","value":';
                 if (cur.type !== 'int' && cur.type !== 'bool' && cur.type !== 'float') data += '"';
@@ -784,61 +863,65 @@
                 data += '}';
                 win.app.load('/api/v1/config/' + name, 'json', callback.bind(self), data);
             },
+            find_in_data: function (name) {
+                var self = this, i, g;
+                if (!self.data || !Array.isArray(self.data)) return null;
+                
+                // Check if data is grouped (has group_id) or flat
+                if (self.data.length > 0 && self.data[0].group_id !== undefined) {
+                    // Grouped mode: iterate through groups and their items
+                    for (g = 0; g < self.data.length; g++) {
+                        var group = self.data[g];
+                        if (group.items && Array.isArray(group.items)) {
+                            for (i = 0; i < group.items.length; i++) {
+                                if (group.items[i].name === name) {
+                                    return group.items[i];
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Flat mode: iterate through data directly
+                    for (i = 0; i < self.data.length; i++) {
+                        if (self.data[i].name === name) {
+                            return self.data[i];
+                        }
+                    }
+                }
+                return null;
+            },
             render: function () {
                 var self = win.app.config;
                 if (!self.data) return;
-                var data = self.data, tr = null,
-                    td = null, input = null, opt = null, val = null, el = null;
-                var i = 0, j = data.length, k = 0, l = 0;
+                var data = self.data;
                 var slot = self.el;
                 slot.innerHTML = '';
-                el = document.createElement('table');
-                slot.appendChild(el);
-                slot = el;
-                el = document.createElement('thead');
-                tr = document.createElement('tr');
-                td = document.createElement('th');
-                td.innerHTML = 'Name';
-                tr.appendChild(td);
-                td = document.createElement('th');
-                td.innerHTML = 'Value';
-                tr.appendChild(td);
-                td = document.createElement('th');
-                td.innerHTML = 'Info';
-                tr.appendChild(td);
-                el.appendChild(tr);
-                slot.appendChild(el);
-                el = document.createElement('tbody');
-                slot.appendChild(el);
-                slot = el;
-                for (; i < j; ++i) {
-                    el = data[i];
-                    if (!el || !el.name) continue;
-                    tr = document.createElement('tr');
+                var items = data[0].group_id === undefined ? data : 0;
+
+                function createConfigRow(el) {
+                    var tr = document.createElement('tr'), x;
                     if (el.depends) {
                         tr.classList.add('depends');
                         tr.dataset.depends = el.depends;
-                        var x = data.find(function (el) {
-                            return el.name === tr.dataset.depends;
-                        });
+                        x = items && items.find(function (el2) {
+                            return el2.name === el.depends;
+                        }) || null;
                         if (x && x.value === 0) {
                             tr.classList.add('hide');
                         }
                     }
-                    td = document.createElement('td');
+                    var td = document.createElement('td');
                     td.className = 'name';
                     td.innerHTML = String(el.name).charAt(0).toUpperCase() + String(el.name).slice(1);
                     tr.appendChild(td);
                     td = document.createElement('td');
                     td.className = 'value';
-                    if (!el.toggles) {
-                        input = document.createElement(el.values ? 'select' : 'input');
-                    }
+                    var input, opt, val, k, l;
                     if (el.toggles) {
                         for (k = 0, l = el.toggles.length; k < l; k++) {
                             input = document.createElement('button');
                             input.innerHTML = el.toggles[k].title;
-                            if ((el.value & (1 << (el.toggles[k].pos))) === 0) { // test bit
+                            if ((el.value & (1 << (el.toggles[k].pos))) === 0) {
                                 input.className = 'outline';
                                 input.dataset.value = 0;
                             } else {
@@ -851,32 +934,27 @@
                             input.addEventListener('click', function () {
                                 return function (e) {
                                     var x = e.target;
-                                    var i, m = 0;
                                     var w = x.dataset.value == 1 ? 0x01 : 0x00;
                                     var v = parseFloat(x.dataset.pos);
-                                    for (; m < self.data.length; ++m) {
-                                        if (x.dataset.name === self.data[m].name) {
-                                            i = self.data[m].value;
-                                            break;
-                                        }
-                                    }
+                                    var j = self.find_in_data(x.dataset.name);
+                                    if(!j || !j.value) return;
+                                    var i = parseFloat(j.value);
                                     if (w === 1) {
-                                        (i &= ~(1 << v)); // clear bit
+                                        (i &= ~(1 << v));
                                         x.dataset.value = 0;
                                         x.className = 'outline';
                                     } else {
-                                        (i |= (1 << v)); // set bit
+                                        (i |= (1 << v));
                                         x.dataset.value = 1;
                                         x.className = '';
                                     }
-                                    console.log('Change ' + x.dataset.name + ' from ' + self.data[m].value + ' to ' + i);
                                     self.save(x.dataset.name, i);
                                 };
                             }());
                             td.appendChild(input);
                         }
-                    }
-                    else if (el.values) {
+                    } else if (el.values) {
+                        input = document.createElement('select');
                         for (k = 0, l = el.values.length; k < l; k++) {
                             opt = document.createElement('option');
                             val = el.values[k];
@@ -888,28 +966,38 @@
                         input.addEventListener('change', function (e) {
                             var x = e.target;
                             var y = x.options[x.selectedIndex];
-                            console.log('Change ' + x.name + ' to ' + y.value);
                             self.save(x.name, y.value);
-                        }
-                        );
+                        });
                     } else {
+                        input = document.createElement('input');
                         if (el.type === 'bool') {
                             input.type = 'checkbox';
                             input.checked = (el.value === 'true' || el.value === 1 || el.value === '1' || el.value === true);
                             input.role = 'switch';
                             input.addEventListener('change', function (e) {
                                 var x = e.target;
-                                console.log('Change ' + x.name + ' to ' + x.checked);
                                 self.save(x.name, x.checked ? 1 : 0);
+                                var y = document.querySelectorAll('.card-body tr[data-depends="' + x.name + '"]');
+                                y.forEach(function (el) {
+                                    if (x.checked) {
+                                        el.classList.remove('hide');
+                                    } else {
+                                        el.classList.add('hide');
+                                    }
+                                });
                             });
-                        }
-                        else {
+                        } else if (el.type === 'int') {
+                            input.type = 'range';
+                            input.step = el.step || 1;
+                            input.min = el.min || 0;
+                            input.max = el.max || el.value + 100;
+                            input.value = el.value + '';
+                        } else {
                             input.value = el.value + '';
                             input.type = 'text';
                             input.addEventListener('keyup', function (e) {
                                 var x = e.target;
-                                if (e.keyCode === 13) {   // Enter key
-                                    console.log('Change ' + x.name + ' to ' + x.value);
+                                if (e.keyCode === 13) {
                                     self.save(x.name, x.value);
                                 }
                             });
@@ -918,13 +1006,92 @@
                     if (!el.toggles) {
                         input.name = el.name;
                         td.appendChild(input);
+                        if (el.type === 'int' && input.type === 'range') {
+                            var valspan = document.createElement('span');
+                            valspan.className = 'right';
+                            valspan.innerHTML = el.value;
+                            td.appendChild(valspan);
+                            input.addEventListener('input', function (e) {
+                                var x = e.target;
+                                valspan.innerHTML = x.value;
+                            });
+                            input.addEventListener('change', function name(e) {
+                                var x = e.target;
+                                self.save(x.name, x.value);
+                            });
+                        }
                     }
                     tr.appendChild(td);
                     td = document.createElement('td');
                     td.innerHTML = el.info;
                     td.className = 'info';
                     tr.appendChild(td);
-                    slot.appendChild(tr);
+                    return tr;
+                }
+                if(data.length > 0) {
+                    if (items === 0) {
+                        // Grouped mode
+                        data.forEach(function(item) {
+                            items = item.items;
+                            var grp = document.createElement('details');
+                            grp.className = 'config-group';
+                            var grplabel = document.createElement('summary');
+                            grplabel.innerHTML = item.group_name || 'Default';
+                            grplabel.addEventListener('click', function() {
+                                var t = grp.querySelector('table');
+                                if (t) {
+                                    t.classList.toggle('hide');
+                                    grplabel.classList.toggle('tiny');
+                                }
+                            });
+                            grplabel.classList.add('left');
+                            grplabel.setAttribute('role', 'button');
+                            grplabel.classList.add('secondary');
+                            grp.appendChild(grplabel);
+                            var table = document.createElement('table');
+                            grp.appendChild(table);
+                            if (item.default_hidden) {
+                                table.classList.add('hide');
+                                grplabel.classList.add('tiny');
+                            } else {
+                                grp.setAttribute('open', '');
+                            }
+                            // Create thead
+                            // Create tbody
+                            var tbody = document.createElement('tbody');
+                            table.appendChild(tbody);
+                            items.forEach(function(el) {
+                                tbody.appendChild(createConfigRow(el));
+                            });
+                            slot.appendChild(grp);
+                        });
+                    } else {
+                        // Old way
+                        var table = document.createElement('table');
+                        slot.appendChild(table);
+                        var tbody = document.createElement('tbody');
+                        table.appendChild(tbody);
+                        items.forEach(function(el) {
+                            if (!el || !el.name) return;
+                            tbody.appendChild(createConfigRow(el));
+                        });
+                    }
+                    var x = slot.querySelector('[name=log_format]');
+                    var y = slot.querySelector('[name=log_ubx_nav_sat]');
+                    if(x && y) {
+                        var tr = y.closest('tr');
+                        if(x.selectedIndex != 1) { // ubx == 1
+                            tr.classList.add('hide');
+                        }
+                        x.addEventListener('change', function () {
+                            if(x.selectedIndex != 1) {
+                                tr.classList.add('hide');
+                            }  else {
+                                tr.classList.remove('hide');
+                            }
+                        });
+                    }
+                    
                 }
             },
             data: {},

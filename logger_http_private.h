@@ -84,6 +84,12 @@ void stop_async_req_workers(void);
 #define FILE_ENUM(l) file_type_##l,
 enum { FILE_EXTENSIONS(FILE_ENUM) };
 
+void start_async_req_workers(void);
+void stop_async_req_workers(void);
+esp_err_t long_api_handler(httpd_req_t *req);
+esp_err_t long_post_handler(httpd_req_t *req);
+esp_err_t long_get_handler(httpd_req_t *req);
+
 #if (defined(CONFIG_LOGGER_USE_GLOBAL_LOG_LEVEL) && CONFIG_LOGGER_GLOBAL_LOG_LEVEL < CONFIG_LOGGER_HTTP_LOG_LEVEL)
 #define C_LOG_LEVEL CONFIG_LOGGER_GLOBAL_LOG_LEVEL
 #else

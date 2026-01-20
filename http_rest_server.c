@@ -10,6 +10,7 @@
 #include "esp_event.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "esp_netif.h"
 #include "esp_system.h"
 #include "mdns.h"
 
@@ -69,22 +70,22 @@ static const struct m_handler handlers[] = {
     {3,
      {.uri = &url_base[0],
       .method = HTTP_POST,
-      .handler = post_handler,
+      .handler = long_post_handler,
       .user_ctx = (void *)&rest_server_context[0]}},
     {6,
      {.uri = "/*",
       .method = HTTP_HEAD,
       .handler = head_handler,
       .user_ctx = (void *)&rest_server_context[1]}},
-      {12,
-    {.uri = &url_base[0],
+    {12,
+     {.uri = &url_base[0],
       .method = HTTP_GET,
       .handler = api_handler,
       .user_ctx = (void *)&rest_server_context[2]}},
     {12,
      {.uri = "/*",
       .method = HTTP_GET,
-      .handler = get_handler,
+      .handler = long_get_handler,
       .user_ctx = (void *)&rest_server_context[2]}},
     {0}};
 
@@ -96,7 +97,7 @@ static const char * http_rest_server_errors[] = {
 };
 
 httpd_handle_t start_webserver(void) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
@@ -127,7 +128,7 @@ httpd_handle_t start_webserver(void) {
 
 #if !CONFIG_IDF_TARGET_LINUX
 unsigned int stop_webserver(httpd_handle_t server) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     // Stop the httpd server
     const struct m_handler *handler;
     unsigned int ret = 0;
@@ -153,7 +154,27 @@ unsigned int stop_webserver(httpd_handle_t server) {
 #include "esp_mac.h"
 
 static esp_err_t initialise_mdns(void) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
+    // Ensure at least one WiFi netif exists and is up before starting mDNS
+    const TickType_t wait_ticks = pdMS_TO_TICKS(5000);
+    TickType_t start = xTaskGetTickCount();
+    esp_netif_t *netif_ap = NULL;
+    esp_netif_t *netif_sta = NULL;
+    while (true) {
+        netif_ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        netif_sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        bool ap_up = netif_ap && esp_netif_is_netif_up(netif_ap);
+        bool sta_up = netif_sta && esp_netif_is_netif_up(netif_sta);
+        if (ap_up || sta_up) {
+            break;
+        }
+        if ((xTaskGetTickCount() - start) >= wait_ticks) {
+            WLOG(TAG, "[%s] Netif not ready for mDNS, skipping init", __func__);
+            return ESP_ERR_INVALID_STATE;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
     esp_err_t ret = mdns_init();
     if(ret) goto done;
     size_t len = 0;
@@ -185,8 +206,12 @@ static esp_err_t initialise_mdns(void) {
     mdns_txt_item_t serviceTxtData[] = {{"board", "esp32"}, {"path", "/"}};
     ret = mdns_service_add(hn, "_http", "_tcp", 80, serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0]));
     done:
-    if(ret)
-        ELOG(TAG, "%s: %s", http_rest_server_errors[2], esp_err_to_name(ret));
+    if(ret) {
+        WLOG(TAG, "%s: %s", http_rest_server_errors[2], esp_err_to_name(ret));
+    }
+    else {
+        ILOG(TAG, "mDNS initialized with hostname: %s", hn);
+    }
     return ret;
 }
 
@@ -196,10 +221,20 @@ static esp_err_t deinitialise_mdns(void) {
     return ret;
 }
 
+// Refresh mDNS bindings to currently active netifs (AP/STA)
+static void refresh_mdns(void) {
+    FUNC_ENTRY(TAG);
+    // If HTTP server is running, safely re-init mDNS to include any new/up netifs
+    deinitialise_mdns();
+    initialise_mdns();
+    ILOG(TAG, "mDNS refreshed for current netifs (AP/STA)");
+}
+
 // Unified task for HTTP server start/stop (prevents event loop blocking)
 // Processes state changes in a loop until reaching stable desired state
 // This handles rapid start→stop→start sequences without race conditions
 static void http_server_task(void *arg) {
+    FUNC_ENTRY(TAG);
     // Loop until current state matches desired state
     while (true) {
         bool current_running = (server != NULL);
@@ -216,9 +251,9 @@ static void http_server_task(void *arg) {
         if (desired_running && !current_running) {
             // Need to start server
             ILOG(TAG, "[http_server_task] Starting HTTP server");
-            #if defined(X1)
+#if defined(CONFIG_WEB_SERVER_ASYNC_WORKER_ENABLED) && (CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 0)
             start_async_req_workers();
-            #endif
+#endif
             server = start_webserver();
             initialise_mdns();
             
@@ -248,9 +283,9 @@ static void http_server_task(void *arg) {
             } else {
                 ELOG(TAG, "Failed to stop http server");
             }
-            #if defined(X1)
+#if defined(CONFIG_WEB_SERVER_ASYNC_WORKER_ENABLED) && (CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 0)
             stop_async_req_workers();
-            #endif
+#endif
         }
         
         // Small delay to allow state updates from events
@@ -263,7 +298,7 @@ static void http_server_task(void *arg) {
 }
 
 esp_err_t http_start_webserver() {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     
     // Set desired state to running
     http_server_desired_state = true;
@@ -295,7 +330,7 @@ esp_err_t http_start_webserver() {
 }
 
 esp_err_t http_stop_webserver() {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     
     // Set desired state to stopped
     http_server_desired_state = false;
@@ -336,18 +371,18 @@ void disconnect_handler(void *arg, esp_event_base_t event_base, int32_t event_id
         } else {
             ELOG(TAG, "%s", http_rest_server_errors[1]);
         }
-        #if defined(X1)
+#if defined(CONFIG_WEB_SERVER_ASYNC_WORKER_ENABLED) && (CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 0)
         stop_async_req_workers();
-        #endif
+#endif
     }
 }
 
 void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     httpd_handle_t *server = (httpd_handle_t *)arg;
     if (*server == NULL) {
-        #if defined(X1)
+#if defined(CONFIG_WEB_SERVER_ASYNC_WORKER_ENABLED) && (CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 0)
         start_async_req_workers();
-        #endif
+#endif
         *server = start_webserver();
         initialise_mdns();
     }
@@ -355,7 +390,7 @@ void connect_handler(void *arg, esp_event_base_t event_base, int32_t event_id, v
 #endif
 #endif  // !CONFIG_IDF_TARGET_LINUX
 
-#if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
 static const char * const _http_server_events [] = {
     "HTTP_SERVER_EVENT_ERROR",
     "HTTP_SERVER_EVENT_START",
@@ -367,34 +402,45 @@ static const char * const _http_server_events [] = {
     "HTTP_SERVER_EVENT_DISCONNECTED",
     "HTTP_SERVER_EVENT_STOP"
 };
+static const size_t _http_server_events_count = sizeof(_http_server_events) / sizeof(_http_server_events[0]);
 const char * http_server_events(int id) {
-    return _http_server_events[id];
+    return id < (int)_http_server_events_count ? _http_server_events[id] : "HTTP_SERVER_EVENT";
 }
 #else
-const char * http_server_events(int id) {
-    return "HTTP_SERVER_EVENT";
-}
+const char * http_server_events(int id) {return "HTTP_SERVER_EVENT";}
 #endif
 
 static void esp_http_server_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     if(base == ESP_HTTP_SERVER_EVENT) {
-        esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
- #if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
-        FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
-#endif
+        // esp_http_server_event_data *data = (esp_http_server_event_data *)event_data;
+        if(id == HTTP_SERVER_EVENT_ON_DATA) printf(".");
+        else if(id == HTTP_SERVER_EVENT_SENT_DATA) printf(",");
+        else
+            FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
     }
+#endif
 #if defined (CONFIG_LOGGER_WIFI_ENABLED)
-    else if(base == WIFI_EVENT) {
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
+    else
+#endif
+    if(base == WIFI_EVENT) {
         switch(id) {
             case WIFI_EVENT_AP_START:
-                http_start_webserver();
+                // Start server if not running, else refresh mDNS to add AP
+                if (server == NULL) {
+                    http_start_webserver();
+                } else {
+                    refresh_mdns();
+                }
                 break;
             case WIFI_EVENT_AP_STOP:
-                if (!wifi_is_sta_connecting())
+                if (!wifi_is_sta_connecting()) {
                     http_stop_webserver();
-                break;
-            case WIFI_EVENT_STA_STOP:
-                // OTA stop is now handled by http_server_task when server stops
+                } else {
+                    // Keep server for STA, refresh mDNS to drop AP
+                    if (server != NULL) refresh_mdns();
+                }
                 break;
             default:
                 break;
@@ -403,11 +449,20 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
     else if(base == IP_EVENT) {
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
-                http_start_webserver();
+                // Start server if not running, else refresh mDNS to add STA
+                if (server == NULL) {
+                    http_start_webserver();
+                } else {
+                    refresh_mdns();
+                }
                 break;
             case IP_EVENT_STA_LOST_IP:
-                if (!wifi_is_ap_ready())
+                if (!wifi_is_ap_ready()) {
                     http_stop_webserver();
+                } else {
+                    // Keep server for AP, refresh mDNS to drop STA
+                    if (server != NULL) refresh_mdns();
+                }
                 break;
             default:
                 break;
@@ -416,9 +471,9 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
 #endif
 }
 esp_err_t http_rest_init(const char *basepath) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     if(http_rest_initialized) {
-        DLOG(TAG, "[%s] already initialized", __func__);
+        WLOG(TAG, "[%s] already initialized", __func__);
         return ESP_OK;
     }
     esp_err_t ret = ESP_OK;

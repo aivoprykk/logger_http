@@ -9,7 +9,7 @@
     "forms/input-file": false,
     "forms/input-range": false,
     "forms/input-search": false,
-    "components/accordion": false,
+    "components/accordion": true,
     "components/card": true,
     "components/dropdown": false,
     "components/loading": false,
@@ -193,6 +193,9 @@ input[type="file"] {
     }
     &.config {
       min-height: 90vh;
+      summary {
+        font-weight: 500;
+      }
       td {
         line-break: anywhere;
         margin: 0;
@@ -262,6 +265,19 @@ input[type="file"] {
           justify-content: space-between;
           span {
             line-height: 2rem;
+          }
+          fieldset.path {
+            margin-bottom: 0;
+            display: inline-block;
+            width: initial;
+            label {
+              margin-right: 0.5em
+            }
+            select {
+              width: initial;
+              margin-bottom: 2px;
+            }
+            * { display: inline-block; }
           }
         }
       }
@@ -367,6 +383,12 @@ input[type="file"] {
   }
   .right {
     text-align: right;
+  }
+  .left {
+    text-align: left;
+  }
+  .tiny {
+    font-size: 85%;
   }
   @media (max-width: 468px) {
     padding: 1rem 0;

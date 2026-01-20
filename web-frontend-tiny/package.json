@@ -9,7 +9,7 @@
 		"startw": "webpack-dev-server --mode development"
 	},
 	"devDependencies": {
-		"@picocss/pico": "^2.0.6",
+		"@picocss/pico": "^2.1.1",
 		"babel-loader": "^10.0.0",
 		"compression-webpack-plugin": "^11.1.0",
 		"css-loader": "^7.1.2",
@@ -23,22 +23,22 @@
 		"grunt-contrib-sass": "^2.0.0",
 		"grunt-contrib-uglify": "^5.2.2",
 		"grunt-replace": "^2.0.2",
-		"grunt-sass": "^4.0.0",
-		"html-bundler-webpack-plugin": "^4.18.0",
+		"grunt-sass": "^4.0.1",
+		"html-bundler-webpack-plugin": "^4.22.0",
 		"html-loader": "^5.1.0",
-		"html-webpack-plugin": "^5.6.3",
+		"html-webpack-plugin": "^5.6.5",
 		"load-grunt-tasks": "^5.1.0",
-		"mini-css-extract-plugin": "^2.9.2",
+		"mini-css-extract-plugin": "^2.9.4",
 		"picnic": "^7.1.0",
-		"postcss-loader": "^8.1.1",
-		"postcss-preset-env": "^10.1.5",
+		"postcss-loader": "^8.2.0",
+		"postcss-preset-env": "^11.1.1",
 		"pug-html-loader": "^1.1.7",
 		"pug-plugin": "^6.0.0",
-		"sass": "^1.85.1",
-		"sass-loader": "^16.0.5",
+		"sass": "^1.97.2",
+		"sass-loader": "^16.0.6",
 		"style-loader": "^4.0.0",
 		"url-loader": "^4.1.1",
 		"webpack-cli": "^6.0.1",
-		"webpack-dev-server": "^5.2.0"
+		"webpack-dev-server": "^5.2.3"
 	}
 }
