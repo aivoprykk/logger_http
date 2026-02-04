@@ -10,14 +10,14 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
-#include "esp_mac.h"
-#include "esp_system.h"
-#include "esp_timer.h"
-#include "lwip/dns.h"
-#include "lwip/err.h"
-#include "lwip/netdb.h"
-#include "lwip/sockets.h"
-#include "lwip/sys.h"
+// #include "esp_mac.h"
+// #include "esp_system.h"
+// #include "esp_timer.h"
+// #include "lwip/dns.h"
+// #include "lwip/err.h"
+// #include "lwip/netdb.h"
+// #include "lwip/sockets.h"
+// #include "lwip/sys.h"
 
 
 #include "esp_ota_ops.h"
@@ -261,7 +261,7 @@ const char * http_client_events(int id) {
 static int output_len=0;       // Stores number of bytes read
 static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     int32_t id = evt->event_id;
-    FUNC_ENTRY_ARGS(TAG, "%s(%ld)", http_client_events(id), id);
+    FUNC_ENTRY_ARGS(TAG, "%s(%" PRId32 ")", http_client_events(id), id);
     switch (id) {
         case HTTP_EVENT_ERROR:
              break;
@@ -335,7 +335,7 @@ static esp_err_t build_version_url(void) {
         return ESP_ERR_NO_MEM;
     }
     version_url_len = (size_t)i;
-    FUNC_ENTRY_ARGS(TAG, "url:%s len:%u", version_url, version_url_len);
+    FUNC_ENTRY_ARGS(TAG, "url:%s len:%zu", version_url, version_url_len);
     return ESP_OK;
 }
 
@@ -585,7 +585,7 @@ void ota_task(void *pvParameter) {
     FUNC_ENTRY(TAG);
     esp_err_t ret = ESP_OK;
     uint32_t check_interval_ms = SEC_TO_MS(CONFIG_OTA_CHECK_INTERVAL) * 60UL; // Convert minutes to milliseconds
-    ILOG(TAG, "Starting OTA task, check interval: %lu ms", check_interval_ms);
+    ILOG(TAG, "Starting OTA task, check interval: %" PRIu32 " ms", check_interval_ms);
 
     // Initial delay before first check
     vTaskDelay(pdMS_TO_TICKS(SEC_TO_MS(10)));

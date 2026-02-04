@@ -30,7 +30,7 @@
 struct m_wifi_context wifi_context = {.hostname = "esp32"};
 #endif
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
-#include "vfs.h"
+// #include "vfs.h"
 #endif
 
 #define HTTP_QUERY_KEY_MAX_LEN (64)
