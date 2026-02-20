@@ -18,8 +18,6 @@
 #include "http_async_handler.h"
 #include "strbf.h"
 #include "uri_common.h"
-// #include "context.h"
-// #include "logger_config.h"
 #include "unified_config.h"
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
 #include "https_ota.h"
@@ -47,6 +45,8 @@ httpd_handle_t *server = 0;
 static TaskHandle_t http_server_task_handle = NULL;
 static volatile bool http_server_desired_state = false; // false=stop, true=start
 static volatile bool http_server_state_changed = false;
+// Timer for delayed WiFi state check before stopping server
+// static TimerHandle_t http_stop_delay_timer = NULL;
 
 uint8_t downloading_file = 0;
 bool http_rest_initialized = false;
@@ -103,6 +103,13 @@ httpd_handle_t start_webserver(void) {
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.stack_size = CONFIG_WEB_SERVER_TASK_STACK_SIZE;
     config.lru_purge_enable = true;
+    
+    // Memory optimization: Limit concurrent connections to prevent heap exhaustion
+    config.max_open_sockets = 1;        // Max 1 concurrent HTTP connection (2 TCP + 1 lwIP = critical)
+    config.backlog_conn = 1;            // Listen backlog limit
+    config.recv_wait_timeout = 5;       // 5 second receive timeout
+    config.send_wait_timeout = 5;       // 5 second send timeout
+    config.max_uri_handlers = 20;       // Limit URI handlers (adjust as needed)
 
     // Start the httpd server
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -224,11 +231,28 @@ static esp_err_t deinitialise_mdns(void) {
 // Refresh mDNS bindings to currently active netifs (AP/STA)
 static void refresh_mdns(void) {
     FUNC_ENTRY(TAG);
+
     // If HTTP server is running, safely re-init mDNS to include any new/up netifs
     deinitialise_mdns();
     initialise_mdns();
     ILOG(TAG, "mDNS refreshed for current netifs (AP/STA)");
+    mem_info();
 }
+
+// Timer callback for delayed WiFi state check before stopping server
+// This allows time for other interfaces (AP/STA) to come up after one goes down
+// static void http_stop_delay_timer_callback(TimerHandle_t xTimer) {
+//     FUNC_ENTRY(TAG);
+//     // Check if any WiFi interface is ready after delay
+//     bool should_stop = !wifi_is_ap_ready() && !wifi_is_sta_connecting();
+
+//     if (should_stop) {
+//         DLOG(TAG, "No WiFi interfaces ready after delay, stopping HTTP server");
+//         http_stop_webserver();
+//     } else {
+//         DLOG(TAG, "WiFi interface available after delay, keeping HTTP server running");
+//     }
+// }
 
 // Unified task for HTTP server start/stop (prevents event loop blocking)
 // Processes state changes in a loop until reaching stable desired state
@@ -236,18 +260,19 @@ static void refresh_mdns(void) {
 static void http_server_task(void *arg) {
     FUNC_ENTRY(TAG);
     // Loop until current state matches desired state
+    task_memory_info(__func__);
     while (true) {
         bool current_running = (server != NULL);
         bool desired_running = http_server_desired_state;
-        
+
         // Check if we've reached the desired state
         if (current_running == desired_running && !http_server_state_changed) {
             DLOG(TAG, "[http_server_task] Reached stable state (running=%d)", current_running);
             break;
         }
-        
+
         http_server_state_changed = false;
-        
+
         if (desired_running && !current_running) {
             // Need to start server
             ILOG(TAG, "[http_server_task] Starting HTTP server");
@@ -256,7 +281,6 @@ static void http_server_task(void *arg) {
 #endif
             server = start_webserver();
             initialise_mdns();
-            
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
             // Start OTA if STA is active and update is enabled
             if (wifi_is_sta_connecting() && g_rtc_config.fw_update.update_enabled) {
@@ -267,7 +291,7 @@ static void http_server_task(void *arg) {
         } else if (!desired_running && current_running) {
             // Need to stop server
             ILOG(TAG, "[http_server_task] Stopping HTTP server");
-            
+
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
             // Stop OTA if update is enabled
             if (g_rtc_config.fw_update.update_enabled) {
@@ -275,7 +299,7 @@ static void http_server_task(void *arg) {
                 https_ota_stop();
             }
 #endif
-            
+
             deinitialise_mdns();
             esp_err_t ret = stop_webserver(server);
             if (!ret) {
@@ -287,76 +311,85 @@ static void http_server_task(void *arg) {
             stop_async_req_workers();
 #endif
         }
-        
+
         // Small delay to allow state updates from events
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    
+
     // Task cleanup
     http_server_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
+#define HTTP_START_STOP_TASK_STACK_SIZE 3072
+
 esp_err_t http_start_webserver() {
     FUNC_ENTRY(TAG);
-    
+
+    // Cancel any pending delayed stop timer
+    // if (http_stop_delay_timer != NULL && xTimerIsTimerActive(http_stop_delay_timer)) {
+    //     DLOG(TAG, "Cancelling delayed HTTP stop timer");
+    //     xTimerStop(http_stop_delay_timer, 0);
+    // }
+
     // Set desired state to running
     http_server_desired_state = true;
     http_server_state_changed = true;
-    
+
     // If task already running, it will pick up the state change
     if (http_server_task_handle != NULL) {
         DLOG(TAG, "HTTP server task already running, updated desired state");
         return ESP_OK;
     }
-    
-    // If already running and no task, we're done
+
+    // If already running and no task, refresh mDNS for any new interfaces
     if (server != NULL) {
-        DLOG(TAG, "HTTP server already running");
+        DLOG(TAG, "HTTP server already running, refreshing mDNS");
+        refresh_mdns();
         return ESP_OK;
     }
-    
+
     // Create task to start server
-    BaseType_t ret = xTaskCreate(http_server_task, "http_srv", 4096, NULL, 3, &http_server_task_handle);
-    
+    BaseType_t ret = xTaskCreate(http_server_task, "http_srv_start", HTTP_START_STOP_TASK_STACK_SIZE, NULL, 3, &http_server_task_handle);
+
     if (ret != pdPASS) {
         ELOG(TAG, "Failed to create HTTP server task");
         http_server_task_handle = NULL;
         return ESP_FAIL;
     }
-    
+
     DLOG(TAG, "HTTP server start deferred to background task");
     return ESP_OK;
 }
 
 esp_err_t http_stop_webserver() {
     FUNC_ENTRY(TAG);
-    
+
     // Set desired state to stopped
     http_server_desired_state = false;
     http_server_state_changed = true;
-    
+
     // If task already running, it will pick up the state change
     if (http_server_task_handle != NULL) {
         DLOG(TAG, "HTTP server task already running, updated desired state");
         return ESP_OK;
     }
-    
+
     // If already stopped and no task, we're done
     if (server == NULL) {
         DLOG(TAG, "HTTP server already stopped");
         return ESP_OK;
     }
-    
+
     // Create task to stop server
-    BaseType_t ret = xTaskCreate(http_server_task, "http_srv", 4096, NULL, 3, &http_server_task_handle);
-    
+    BaseType_t ret = xTaskCreate(http_server_task, "http_srv_stop", HTTP_START_STOP_TASK_STACK_SIZE, NULL, 3, &http_server_task_handle);
+
     if (ret != pdPASS) {
         ELOG(TAG, "Failed to create HTTP server task");
         http_server_task_handle = NULL;
         return ESP_FAIL;
     }
-    
+
     DLOG(TAG, "HTTP server stop deferred to background task");
     return ESP_OK;
 }
@@ -417,7 +450,7 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
         if(id == HTTP_SERVER_EVENT_ON_DATA) printf(".");
         else if(id == HTTP_SERVER_EVENT_SENT_DATA) printf(",");
         else
-            FUNC_ENTRY_ARGS(TAG, "%s", http_server_events(id));
+            FUNC_ENTRY_ARGS(TAG, "%s(%"PRId32")", http_server_events(id), id);
     }
 #endif
 #if defined (CONFIG_LOGGER_WIFI_ENABLED)
@@ -425,21 +458,34 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
     else
 #endif
     if(base == WIFI_EVENT) {
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
+        FUNC_ENTRY_ARGS(TAG, "%s(%"PRId32")", wifi_event_strings(id), id);
+#endif
         switch(id) {
             case WIFI_EVENT_AP_START:
-                // Start server if not running, else refresh mDNS to add AP
-                if (server == NULL) {
-                    http_start_webserver();
-                } else {
-                    refresh_mdns();
-                }
+                // AP started - ensure server is running (handles mDNS refresh if already up)
+                http_start_webserver();
                 break;
             case WIFI_EVENT_AP_STOP:
+                // AP stopped - defer stop check to allow STA to come up
                 if (!wifi_is_sta_connecting()) {
-                    http_stop_webserver();
-                } else {
-                    // Keep server for STA, refresh mDNS to drop AP
-                    if (server != NULL) refresh_mdns();
+                    // Start delayed check timer (100ms)
+                    // if (http_stop_delay_timer != NULL) {
+                    //     xTimerStart(http_stop_delay_timer, 0);
+                    // } else {
+                        http_stop_webserver(); // Fallback if timer not created
+                    // }
+                }
+                break;
+            case WIFI_EVENT_STA_STOP:
+                // STA stopped - defer stop check to allow AP to come up
+                if (!wifi_is_ap_ready()) {
+                    // Start delayed check timer (100ms)
+                    // if (http_stop_delay_timer != NULL) {
+                    //     xTimerStart(http_stop_delay_timer, 0);
+                    // } else {
+                        http_stop_webserver(); // Fallback if timer not created
+                    // }
                 }
                 break;
             default:
@@ -447,21 +493,23 @@ static void esp_http_server_event_handler(void *handler_args, esp_event_base_t b
         }
     }
     else if(base == IP_EVENT) {
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
+        FUNC_ENTRY_ARGS(TAG, "IP_EVENT_%s(%"PRId32")", id == IP_EVENT_STA_GOT_IP ? "STA_GOT_IP" : id == IP_EVENT_STA_LOST_IP ? "STA_LOST_IP" : "OTHER", id);
+#endif
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
-                // Start server if not running, else refresh mDNS to add STA
-                if (server == NULL) {
-                    http_start_webserver();
-                } else {
-                    refresh_mdns();
-                }
+                // STA got IP - ensure server is running (handles mDNS refresh if already up)
+                http_start_webserver();
                 break;
             case IP_EVENT_STA_LOST_IP:
+                // STA lost IP - defer stop check to allow AP to come up
                 if (!wifi_is_ap_ready()) {
-                    http_stop_webserver();
-                } else {
-                    // Keep server for AP, refresh mDNS to drop STA
-                    if (server != NULL) refresh_mdns();
+                    // Start delayed check timer (100ms)
+                    // if (http_stop_delay_timer != NULL) {
+                    //     xTimerStart(http_stop_delay_timer, 0);
+                    // } else {
+                        http_stop_webserver(); // Fallback if timer not created
+                    // }
                 }
                 break;
             default:
@@ -481,6 +529,23 @@ esp_err_t http_rest_init(const char *basepath) {
     //     ret = ESP_FAIL;
     //     goto done;
     // }
+
+    // Create delayed stop check timer (100ms one-shot)
+    // if (http_stop_delay_timer == NULL) {
+    //     http_stop_delay_timer = xTimerCreate(
+    //         "http_stop_delay",
+    //         pdMS_TO_TICKS(100),
+    //         pdFALSE,  // One-shot timer
+    //         NULL,
+    //         http_stop_delay_timer_callback
+    //     );
+    //     if (http_stop_delay_timer == NULL) {
+    //         ELOG(TAG, "[%s] Failed to create delayed stop timer", __func__);
+    //         ret = ESP_FAIL;
+    //         goto done;
+    //     }
+    // }
+
     if(esp_event_handler_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &esp_http_server_event_handler, NULL)) {
         ELOG(TAG, "[%s] Failed to register event handler", __func__);
         ret = ESP_FAIL;

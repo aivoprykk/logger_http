@@ -15,6 +15,7 @@
 #include "http_rest_server.h"
 // #include "logger_config.h"
 #include "config_registry.h" // Now accessible from logger_common
+#include "config_lock.h"
 #include "context.h"
 #include "logger_buffer_pool.h" // Add centralized buffer pool
 #if defined(CONFIG_USE_OTA)
@@ -222,10 +223,27 @@ done:
 // Submit an HTTP req to the async worker queue
 static esp_err_t queue_request(httpd_req_t *req, httpd_req_handler_t handler) {
 	FUNC_ENTRY(TAG);
+	
+	// Memory protection: Check available heap before accepting request
+	size_t free_heap = esp_get_free_heap_size();
+	size_t min_heap = esp_get_minimum_free_heap_size();
+	
+	DLOG(TAG, "Queue request - Free heap: %u bytes, Min ever: %u bytes", free_heap, min_heap);
+	
+	// Reject request if heap is critically low (< 3KB)
+	if (free_heap < 3072) {
+		WLOG(TAG, "Low memory (%u bytes)! Rejecting HTTP request", free_heap);
+		httpd_resp_set_status(req, "503 Service Unavailable");
+		httpd_resp_set_type(req, "text/plain");
+		httpd_resp_sendstr(req, "Server busy - low memory. Please retry later.");
+		return ESP_FAIL;
+	}
+	
 	// must create a copy of the request that we own
 	httpd_req_t *copy = NULL;
 	esp_err_t err = httpd_req_async_handler_begin(req, &copy);
 	if (err != ESP_OK) {
+		ELOG(TAG, "Failed to begin async handler (heap: %u)", free_heap);
 		return err;
 	}
 	httpd_async_req_t async_req = {
@@ -1450,6 +1468,7 @@ esp_err_t api_handler(httpd_req_t *req) {
 	} else if (strstr(uri, "files") == uri) {
 		uri += 5;
 		char *filepath;
+		bool path_handle_allocated = false;
 		logger_buffer_handle_t path_handle = {0};
 		if (get_http_buffer(LOGGER_BUFFER_USAGE_HTTP_PATH, LOGGER_BUFFER_SMALL,
 							&path_handle) != ESP_OK) {
@@ -1457,6 +1476,7 @@ esp_err_t api_handler(httpd_req_t *req) {
 			msglen = 24;
 			goto err;
 		}
+		path_handle_allocated = true;
 		filepath = (char *)path_handle.buffer;
 
 		strbf_t pathbuf;
@@ -1488,6 +1508,8 @@ esp_err_t api_handler(httpd_req_t *req) {
 				ELOG(TAG, "Failed to %s file : %s", p, pathbuf.start);
 				msg = buf.start;
 				msglen = buf.cur - buf.start;
+				if (path_handle_allocated)
+					release_http_buffer(&path_handle);
 				goto err;
 			}
 			http_send_json_msg(req, http_async_handler_status_strings[2], 7, 0,
@@ -1497,11 +1519,14 @@ esp_err_t api_handler(httpd_req_t *req) {
 			directory_handler(req, filepath, 0, 1, &buf, flush_size);
 			break;
 		case -2:
+			if (path_handle_allocated)
+				release_http_buffer(&path_handle);
 			goto err;
 		default:
 			break;
 		}
-		release_http_buffer(&path_handle); // Release shared buffer
+		if (path_handle_allocated)
+			release_http_buffer(&path_handle); // Release shared buffer
 	} else {
 	err:
 		httpd_resp_set_status(req, HTTPD_500);
@@ -2129,8 +2154,6 @@ esp_err_t long_api_handler(httpd_req_t *req) {
 		return ESP_OK;
 	} else {
 		return api_handler(req);
-		task_memory_info(__func__);
-		return ESP_OK;
 	}
 }
 
@@ -2141,8 +2164,6 @@ esp_err_t long_post_handler(httpd_req_t *req) {
 		return ESP_OK;
 	} else {
 		return post_handler(req);
-		task_memory_info(__func__);
-		return ESP_OK;
 	}
 }
 
@@ -2247,6 +2268,8 @@ void stop_async_req_workers(void) {
 		vQueueDelete(async_req_queue);
 		async_req_queue = NULL;
 	}
+	vSemaphoreDelete(worker_ready_count);
+	worker_ready_count = NULL;
 
 	// Note: Centralized buffer pool cleanup is handled by
 	// logger_buffer_pool_deinit() which should be called during system shutdown
