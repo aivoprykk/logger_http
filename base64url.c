@@ -79,7 +79,7 @@ int base64url_encode(const unsigned char *in, unsigned int inlen, char *out)
 	i -= 1;
 
 	/* check the last and add padding */
-    
+
 	if ((i % 3) == 0) {
 		out[j++] = base64en[(in[i] & 0x3) << 4];
 		//out[j++] = BASE64_PAD;

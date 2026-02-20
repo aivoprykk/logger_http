@@ -129,7 +129,7 @@ static ota_check_result_t compare_app_version(const char *new_version, const cha
         int new_num = atoi(new_ptr), old_num = atoi(old_ptr);
         if(new_num > old_num) return OTA_CHECK_VERSION_MAJOR_AVAILABLE;
         if(new_num < old_num) return OTA_CHECK_VERSION_CURRENT;  // Downgrade: reject
-        
+
         new_ptr = strchr(new_ptr, '.'), old_ptr = strchr(old_ptr, '.');
         if(!new_ptr || !old_ptr) return OTA_CHECK_VERSION_STR_NOT_MATCH;
         if(++new_ptr) new_num = atoi(new_ptr);
@@ -472,7 +472,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
     if(wait_until && get_millis() < wait_until) {
         return ret;
     }
-    if(xSemaphoreTake(xMutex, 0) == pdTRUE){
+    if(xSemaphoreTake(xMutex, 0) == pdTRUE) {
         esp_https_ota_handle_t https_ota_handle = NULL;
         // esp_err_t ota_finish_err = ESP_OK;
         char img_url[OTA_URL_SIZE] = {0};
@@ -523,7 +523,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
 
         // m_context.firmware_update_started = 2;
         vTaskDelay(pdMS_TO_TICKS(100));
-        
+
         wait_until = get_millis() + 60000;
         if (!wait_for_fw_permission(wait_until)) {
             if (ota_task_started) {
@@ -571,7 +571,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
             esp_https_ota_abort(https_ota_handle);
         if(xMutex)
             xSemaphoreGive(xMutex);
-        
+
     }
     return ret;
     ota_cancel:
@@ -589,14 +589,14 @@ void ota_task(void *pvParameter) {
 
     // Initial delay before first check
     vTaskDelay(pdMS_TO_TICKS(SEC_TO_MS(10)));
-    
+
     while (ota_task_started) {
         ota_get_task(pvParameter);
 
         if (!ota_task_started) {
             break;
         }
-        
+
         // Block for the check interval or until notified to stop
         // ulTaskNotifyTake returns non-zero if notified, zero if timeout
         uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(check_interval_ms));
