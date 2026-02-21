@@ -18,6 +18,9 @@
 #include "config_lock.h"
 #include "context.h"
 #include "logger_buffer_pool.h" // Add centralized buffer pool
+#if defined(CONFIG_LOGGER_USE_WDT)
+#include "esp_task_wdt.h"
+#endif
 #if defined(CONFIG_USE_OTA)
 #include "ota.h"
 #endif
@@ -482,6 +485,9 @@ static esp_err_t send_file(httpd_req_t *req, int fd, uint32_t len) {
 			}
 		}
 		i -= read_bytes;
+#if defined(CONFIG_LOGGER_USE_WDT)
+		esp_task_wdt_reset();
+#endif
 	} while (read_bytes > 0);
 	TLOG(TAG, "%s", "\n");
 done:
@@ -1781,13 +1787,30 @@ esp_err_t post_handler(httpd_req_t *req) {
 	char content_type[64] = {0}, *c = content_type;
 	char prev[12] = {0};
 	uint16_t buflen = SCRATCH_BUFSIZE, fnamelen = 0, boundarylen = 0;
-	char *buf = malloc(buflen);
-	char *boundary = malloc(80);
+	logger_buffer_handle_t buf_handle = {0};
+	logger_buffer_handle_t boundary_handle = {0};
+	char *buf = NULL;
+	char *boundary = NULL;
 	char fname[64] = {0};
+	char fpath[128] = {0}; // full directory path for the upload; kept for partial-file cleanup
 	int fp = -1;
 	bool mpart_open = false;
 	uint8_t api = (strstr(req->uri, API_BASE) == req->uri) ? 1 : 0;
 	uint8_t u_mode = strstr(req->uri, "/fw/update") >= req->uri ? 1 : 0;
+	if (get_http_buffer(LOGGER_BUFFER_USAGE_HTTP_SCRATCH, LOGGER_BUFFER_LARGE,
+						&buf_handle) != ESP_OK) {
+		ELOG(TAG, "Failed to allocate receive buffer");
+		return ESP_FAIL;
+	}
+	buf = (char *)buf_handle.buffer;
+	buflen = (uint16_t)buf_handle.size;
+	if (get_http_buffer(LOGGER_BUFFER_USAGE_HTTP_SCRATCH, LOGGER_BUFFER_SMALL,
+						&boundary_handle) != ESP_OK) {
+		ELOG(TAG, "Failed to allocate boundary buffer");
+		release_http_buffer(&buf_handle);
+		return ESP_FAIL;
+	}
+	boundary = (char *)boundary_handle.buffer;
 	httpd_req_get_hdr_value_str(req, "Content-Type", buf, buflen);
 	httpd_resp_set_hdr(req, "Connection", "close");
 	mpb = strstr(buf, "multipart");
@@ -1847,15 +1870,24 @@ esp_err_t post_handler(httpd_req_t *req) {
 			0) {
 			if (recieved == HTTPD_SOCK_ERR_TIMEOUT) {
 				// Retry receiving if timeout occurred
-				WLOG(TAG, "Socket timeout after %" PRIu32 " ms, retrying ...",
-					 (uint32_t)(get_millis() - now));
-				if (retry_times++ < 3)
+				WLOG(TAG, "Socket timeout after %" PRIu32 " ms, retrying (%u/10)...",
+					 (uint32_t)(get_millis() - now), retry_times + 1);
+				if (retry_times++ < 10)
 					continue;
 			}
-			ELOG(TAG, "http recieve data timeout, hanged at byte %" PRIu32 "",
-				 l);
+			ELOG(TAG, "http post data recieve error at byte %" PRIu32 ": %s",
+				 l, esp_err_to_name(recieved));
 			goto toerr;
 		}
+		retry_times = 0; // reset on each successful recv
+		// Yield to let lwIP TCPIP task send TCP ACKs and advance the receive
+		// window promptly. Without this, TCP_WND (5760 bytes) fills up and
+		// throughput collapses under sustained large transfers.
+		taskYIELD();
+
+#if defined(CONFIG_LOGGER_USE_WDT)
+		esp_task_wdt_reset();
+#endif
 
 		if (is_multipart) {
 			parts[mpart_num].start_mark = buf;
@@ -1987,6 +2019,7 @@ esp_err_t post_handler(httpd_req_t *req) {
 					FUNC_ENTRY_ARGSD(TAG, "open path: %s name: %s", pbuf.start,
 									 fname);
 					fp = s_open(fname, pbuf.start, "w+");
+					strncpy(fpath, pbuf.start, sizeof(fpath) - 1);
 				}
 				if (fp >= 0) {
 					write(fp, parts[0].start_mark,
@@ -2007,8 +2040,6 @@ esp_err_t post_handler(httpd_req_t *req) {
 			strbf_put(&data, buf, recieved);
 		}
 		l += recieved;
-		FUNC_ENTRY_ARGSD(TAG, "recieved: %d, total: %d, l: %" PRIu32 "",
-						 recieved, total_len, l);
 		total_len -= recieved;
 		memcpy(prev, buf + recieved - 11, 11);
 		prev[11] = 0;
@@ -2120,6 +2151,12 @@ esp_err_t post_handler(httpd_req_t *req) {
 		}
 		if (err < 0) {
 		toerr:
+			err = ESP_FAIL; // Returning ESP_FAIL causes httpd to close the TCP
+							// socket immediately - browser reconnects fresh on
+							// retry. Do NOT drain here: goto toerr can be
+							// reached mid-recv-loop (e.g. s_open failure) while
+							// total_len still holds the full file size; draining
+							// would silently consume the entire upload body.
 			// Ensure config lock is released on error path
 			if (config_locked) {
 				config_unlock();
@@ -2136,10 +2173,26 @@ done:
 	httpd_resp_send_chunk(req, 0, 0);
 	if (ota_result.status == ESP_OK && ota_result.callback)
 		ota_result.callback(); // will request restart
+	// Always close the file descriptor - it is NOT closed on any error path
+	// above. A leaked fd causes s_open() to fail on the very next upload
+	// attempt because FATFS still holds the file locked.
+	if (fp > 0) {
+		close(fp);
+		fp = -1;
+		if (err != ESP_OK && fname[0] && fpath[0]) {
+			// Remove the partial/corrupt file so retries start clean.
+			// Use fpath (captured at open time) - not the gps_log_part default,
+			// since the upload target may be any mounted partition (e.g. /sdcard).
+			char partial_path[128] = {0};
+			snprintf(partial_path, sizeof(partial_path), "%s/%s", fpath, fname);
+			unlink(partial_path);
+			WLOG(TAG, "Removed partial upload file: %s", partial_path);
+		}
+	}
 	task_memory_info(__func__);
 	strbf_free(&data);
-	free(buf);
-	free(boundary);
+	release_http_buffer(&buf_handle);
+	release_http_buffer(&boundary_handle);
 	IMEAS_END_ARGS(TAG, " %s", req->uri);
 	return err;
 }
@@ -2194,6 +2247,16 @@ static void async_req_worker_task(void *p) {
 			httpd_req_t *req = async_req.req;
 			ILOG(TAG, "invoking uri '%s'", req->uri);
 
+#if defined(CONFIG_LOGGER_USE_WDT)
+			bool wdt_added = false;
+			esp_err_t wdt_err = esp_task_wdt_add(NULL);
+			if (wdt_err == ESP_OK) {
+				wdt_added = true;
+			} else if (wdt_err != ESP_ERR_INVALID_STATE) {
+				WLOG(TAG, "TWDT add failed (%d)", wdt_err);
+			}
+#endif
+
 			// call the handler
 			async_req.handler(req);
 
@@ -2203,6 +2266,12 @@ static void async_req_worker_task(void *p) {
 				ELOG(TAG, "failed to complete async req");
 			}
 			ILOG(TAG, "completed uri '%s'", req->uri);
+
+#if defined(CONFIG_LOGGER_USE_WDT)
+			if (wdt_added) {
+				esp_task_wdt_delete(NULL);
+			}
+#endif
 		}
 		// if(loops++ > 100) {
 		//     loops = 0;

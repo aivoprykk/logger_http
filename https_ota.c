@@ -23,6 +23,9 @@
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
+#if defined(CONFIG_LOGGER_USE_WDT)
+#include "esp_task_wdt.h"
+#endif
 
 #include "context.h"
 // #include "logger_config.h"
@@ -469,6 +472,9 @@ static esp_err_t ota_get_task(void *pvParameter) {
     FUNC_ENTRY(TAG);
     uint32_t wait_until = m_context.fw_update_postponed;
     esp_err_t ret = ESP_OK;
+#if defined(CONFIG_LOGGER_USE_WDT)
+    bool wdt_added = false;
+#endif
     if(wait_until && get_millis() < wait_until) {
         return ret;
     }
@@ -532,8 +538,22 @@ static esp_err_t ota_get_task(void *pvParameter) {
             goto ota_cancel;
         }
         esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_START, NULL,0, portMAX_DELAY);
+
+#if defined(CONFIG_LOGGER_USE_WDT)
+        esp_err_t wdt_err = esp_task_wdt_add(NULL);
+        if (wdt_err == ESP_OK) {
+            wdt_added = true;
+        } else if (wdt_err != ESP_ERR_INVALID_STATE) {
+            WLOG(TAG, "TWDT add failed (%d)", wdt_err);
+        }
+#endif
         while (1) {
             ret = esp_https_ota_perform(https_ota_handle);
+#if defined(CONFIG_LOGGER_USE_WDT)
+            if (wdt_added) {
+                esp_task_wdt_reset();
+            }
+#endif
             if (ret != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
                 break;
             }
@@ -567,6 +587,11 @@ static esp_err_t ota_get_task(void *pvParameter) {
             esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FINISH, NULL,0, portMAX_DELAY);
         }
     ota_done:
+#if defined(CONFIG_LOGGER_USE_WDT)
+        if (wdt_added) {
+            esp_task_wdt_delete(NULL);
+        }
+#endif
         if(https_ota_handle)
             esp_https_ota_abort(https_ota_handle);
         if(xMutex)

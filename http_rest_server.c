@@ -105,10 +105,14 @@ httpd_handle_t start_webserver(void) {
     config.lru_purge_enable = true;
     
     // Memory optimization: Limit concurrent connections to prevent heap exhaustion
-    config.max_open_sockets = 1;        // Max 1 concurrent HTTP connection (2 TCP + 1 lwIP = critical)
+    config.max_open_sockets = CONFIG_LWIP_MAX_ACTIVE_TCP; // 3 sockets: 1 upload + 1 for any browser preflight/retry
+                                        // IMPORTANT: with max_open_sockets=1 + lru_purge_enable,
+                                        // any second connection (CORS, keepalive) kills ongoing upload
     config.backlog_conn = 1;            // Listen backlog limit
-    config.recv_wait_timeout = 5;       // 5 second receive timeout
-    config.send_wait_timeout = 5;       // 5 second send timeout
+    config.lru_purge_enable = false;    // Disable: with max_open_sockets=2 we have room;
+                                        // LRU purge would silently abort an ongoing large upload
+    config.recv_wait_timeout = 30;      // 30 second receive timeout (allow slow uploads / WiFi retransmits)
+    config.send_wait_timeout = 30;      // 30 second send timeout
     config.max_uri_handlers = 20;       // Limit URI handlers (adjust as needed)
 
     // Start the httpd server
