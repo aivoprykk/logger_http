@@ -26,9 +26,6 @@
 #endif
 #include "numstr.h"
 #include "strbf.h"
-#if defined(CONFIG_LOGGER_VFS_ENABLED)
-#include "vfs.h"
-#endif
 #ifdef CONFIG_USE_FATFS
 #include "vfs_fat_spiflash.h"
 #endif
@@ -191,8 +188,6 @@ static int http_config_set_bulk(const char *json, bool commit) {
 	}
 	return 0;
 }
-
-#define OLDDD 1
 
 #if defined(CONFIG_WEB_SERVER_ASYNC_WORKER_ENABLED) &&                         \
 	(CONFIG_WEB_SERVER_NUM_ASYNC_WORKERS > 0)
@@ -1201,18 +1196,24 @@ static esp_err_t index_get_handler(httpd_req_t *req, char *path) {
 	int fd = open(path, O_RDONLY, 0);
 	char *data = 0;
 	int ret = ESP_OK;
-	if (fd) {
-		char hostname[24] = {0};
+	if (fd >= 0) {
+		char hostname[80] = {0};
 		char tmp[8] = {0}, *be = hostname;
 		size_t bl = 0, hl = 0;
 		memcpy(be, "http://", 7), be += 7;
 		hl = strlen(wifi_context.hostname);
+		if (hl > sizeof(hostname) - 15) hl = sizeof(hostname) - 15;
 		memcpy(be, wifi_context.hostname, hl), be += hl;
 		memcpy(be, ".local", 6), be += 6;
 		*be++ = '/', *be = 0;
 		hl = be - &(hostname[0]);
 
-		data = malloc(sb.st_size + hl);
+		data = heap_caps_malloc(sb.st_size + hl, MALLOC_CAP_DEFAULT);
+		if (!data) {
+			ELOG(TAG, "Failed to allocate %ld bytes for index", (long)(sb.st_size + hl));
+			close(fd);
+			return ESP_ERR_NO_MEM;
+		}
 		int read_bytes = read(fd, data, sb.st_size);
 		*(data + sb.st_size) = 0;
 		DLOG(TAG, "send index 0 : %s, %d, %s, %d", data, read_bytes, hostname,
@@ -1258,7 +1259,7 @@ static esp_err_t index_get_handler(httpd_req_t *req, char *path) {
 		ret = ESP_FAIL;
 	}
 	if (data)
-		free(data);
+		heap_caps_free(data);
 	IMEAS_END_ARGS(TAG, " %s", req->uri);
 	return ret;
 }
@@ -1358,7 +1359,6 @@ esp_err_t head_handler(httpd_req_t *req) {
 }
 
 int8_t try_file_path(httpd_req_t *req, strbf_t *pathbuf, const char *p) {
-	char strbuf[SCRATCH_BUFSIZE] = {0};
 	rest_server_context_t *rest_context =
 		(rest_server_context_t *)req->user_ctx;
 	if (!rest_context)
@@ -1652,7 +1652,7 @@ esp_err_t get_handler(httpd_req_t *req) {
 		}
 		DLOG(TAG, "Going to open file: %s, uri: %s", &filepath[0], req->uri);
 		fd = open(&(filepath[0]), O_RDONLY, 0);
-		if (fd) {
+		if (fd >= 0) {
 			// set_content_type_from_file(req, pathbuf.start, pathbuf.cur -
 			// pathbuf.start);
 			err = send_file(req, fd, 0);
@@ -2279,10 +2279,12 @@ static void async_req_worker_task(void *p) {
 		delay_ms(50);
 	}
 }
-
+static uint8_t workers_initialized = 0;
 void start_async_req_workers(void) {
 	FUNC_ENTRY(TAG);
-
+	if (workers_initialized) {
+		return;
+	}
 	// Initialize centralized buffer pool if not already done
 	if (!logger_buffer_pool_is_initialized()) {
 		if (logger_buffer_pool_init() != ESP_OK) {
@@ -2322,6 +2324,7 @@ void start_async_req_workers(void) {
 			continue;
 		}
 	}
+	workers_initialized = 1;
 }
 
 void stop_async_req_workers(void) {
@@ -2342,6 +2345,7 @@ void stop_async_req_workers(void) {
 
 	// Note: Centralized buffer pool cleanup is handled by
 	// logger_buffer_pool_deinit() which should be called during system shutdown
+	workers_initialized = 0;
 }
 #endif
 #endif

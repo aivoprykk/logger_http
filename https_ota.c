@@ -105,10 +105,6 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t id, vo
 }
 #endif
 
-static int find_num(const char * str) {
-    return 0;
-}
-
 typedef enum {
     OTA_CHECK_VERSION_ERROR = -1,
     OTA_CHECK_VERSION_CURRENT,
@@ -299,7 +295,6 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
 
 static char local_response_buffer[LOCAL_BUF_LEN] = {0};
 static char version_url[OTA_URL_SIZE] = {0};  // Built per-request and cached for reuse
-static char placeholder_url[OTA_URL_SIZE] = {0};  // Placeholder URL for client init
 size_t version_url_len = 0;
 
 RTC_DATA_ATTR uint64_t last_check = 0, next_check = 0;
@@ -316,7 +311,7 @@ static TaskHandle_t ota_task_handle = NULL;  // Handle to wake task on stop
 static esp_err_t build_version_url(void);
 
 static esp_http_client_config_t config = {
-    .keep_alive_enable = true,
+    .keep_alive_enable = false,
     .timeout_ms = CONFIG_OTA_RECV_TIMEOUT,
 #ifndef CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
     .cert_pem = (char *)server_cert_pem_start,
@@ -398,22 +393,6 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
                 ret = 1;
                 goto done;
             }
-            size_t ota_url_len = 0;
-#ifdef AAAAA
-            ota_url[ota_url_len] = sizeof(OTA_URI)-1;
-            memcpy(ota_url, OTA_URI, ota_uri_len);
-            memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;
-            *(ota_url+ota_url_len++) = '/';
-            memcpy(ota_url+ota_url_len, project_name, sizeof(project_name)-1), ota_url_len += sizeof(project_name)-1;
-            *(ota_url+ota_url_len++) = '-';
-            memcpy(ota_url+ota_url_len, local_response_buffer, len), ota_url_len += len;
-#if defined(VER_STR_EXT)
-            *(ota_url+ota_url_len++) = '-';
-            memcpy(ota_url+ota_url_len, VER_STR_EXT, sizeof(VER_STR_EXT)-1), ota_url_len += sizeof(VER_STR_EXT)-1;
-#endif
-            memcpy(ota_url+ota_url_len, ".bin", 4), ota_url_len += 4;
-            ota_url[ota_url_len] = 0;
-#else
             int n = snprintf(ota_url, ota_url_size, OTA_URI"%s/"PROJECT_NAME"-%s"
 #if defined(VER_STR_EXT)
                     "-"VER_STR_EXT
@@ -426,7 +405,6 @@ static esp_err_t ota_get_image_path(char *ota_url, size_t ota_url_size) {
                 ret = ESP_ERR_NO_MEM;
                 goto done;
             }
-#endif
             ILOG(TAG, "OTA URL: %s", ota_url);
         }
     } else {
@@ -525,7 +503,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
             goto ota_fail_no_msg;
         }
 
-        esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_AVAILABLE, NULL,0, portMAX_DELAY);
+        esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_AVAILABLE, NULL,0, pdMS_TO_TICKS(100));
 
         // m_context.firmware_update_started = 2;
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -537,7 +515,7 @@ static esp_err_t ota_get_task(void *pvParameter) {
             }
             goto ota_cancel;
         }
-        esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_START, NULL,0, portMAX_DELAY);
+        esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_START, NULL,0, pdMS_TO_TICKS(100));
 
 #if defined(CONFIG_LOGGER_USE_WDT)
         esp_err_t wdt_err = esp_task_wdt_add(NULL);
@@ -581,10 +559,10 @@ static esp_err_t ota_get_task(void *pvParameter) {
         // m_context.firmware_update_started = 0;
         if(ret != ESP_OK) {
             ELOG(TAG, "[%s] upgrade failed, url: %s", __func__, img_url);
-            esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY);
+            esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FAILED, NULL,0, pdMS_TO_TICKS(100));
         }
         else {
-            esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FINISH, NULL,0, portMAX_DELAY);
+            esp_event_post(OTA_AUTO_EVENT, OTA_AUTO_EVENT_UPDATE_FINISH, NULL,0, pdMS_TO_TICKS(100));
         }
     ota_done:
 #if defined(CONFIG_LOGGER_USE_WDT)
@@ -633,11 +611,13 @@ void ota_task(void *pvParameter) {
     }
     vTaskDelete(NULL);
 }
-
-void https_ota_start() {
+void https_ota_start(void) {
     FUNC_ENTRY(TAG);
     esp_err_t err = 0;
-
+    if (ota_task_started) {
+        WLOG(TAG, "OTA already started");
+        return;
+    }
     // Build version URL once at startup
     if (build_version_url() != ESP_OK) {
         ELOG(TAG, "[%s] Failed to build version URL", __func__);

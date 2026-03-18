@@ -74,7 +74,7 @@ esp_err_t ota_deinit() {
 
     error:
     if(result!= ESP_OK)
-        esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY);
+        esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FAILED, NULL,0, pdMS_TO_TICKS(100));
     return result;
 }
 
@@ -128,7 +128,7 @@ esp_err_t ota_start() {
     // Start the timer
     if (xTimerStart(timeout_timer, pdMS_TO_TICKS(100)) != pdPASS)
         ELOG(TAG, "Failed to start timeout timer.");
-    esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_START, NULL,0, portMAX_DELAY);
+    esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_START, NULL,0, pdMS_TO_TICKS(100));
     ota.state = ota_state_InProgress;
     return ESP_OK;
 }
@@ -154,7 +154,7 @@ esp_err_t ota_write(uint8_t* data, uint16_t length) {
 
 static void cb_when_done() {
     FUNC_ENTRY(TAG);
-    esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FINISH, NULL,0, portMAX_DELAY);
+    esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FINISH, NULL,0, pdMS_TO_TICKS(100));
     ota.state = ota_state_Reboot;
     //esp_restart();
 }
@@ -185,7 +185,7 @@ esp_err_t ota_end(struct end_result_s * result) {
     result->callback = cb_when_done;
     error:
     if(result->status != ESP_OK)
-         esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FAILED, NULL,0, portMAX_DELAY);
+         esp_event_post(OTA_FW_EVENT, OTA_FW_EVENT_UPDATE_FAILED, NULL,0, pdMS_TO_TICKS(100));
     finish:
     return result->status;
 }

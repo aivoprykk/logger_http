@@ -38,7 +38,8 @@ menu "Logger HTTP Module Configuration"
 
         config WEB_SERVER_ASYNC_WORKER_TASK_STACK_SIZE
             int "Async workers Task stack size in bytes"
-            default 3840
+            default 3840 if IDF_TARGET_ESP32S3
+            default 3456
             help
                 Asynchronous worker task stack size in bytes
 

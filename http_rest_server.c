@@ -33,6 +33,15 @@ struct m_wifi_context wifi_context = {.hostname = "esp32"};
 
 #define HTTP_QUERY_KEY_MAX_LEN (64)
 
+/* httpd always consumes 3 sockets internally (1 listen + 2 ctrl pipe).
+ * LWIP_MAX_SOCKETS must be at least max_open_sockets + 3.
+ * max_open_sockets is set to CONFIG_LWIP_MAX_ACTIVE_TCP in start_webserver(). */
+#if CONFIG_LWIP_MAX_SOCKETS < (CONFIG_LWIP_MAX_ACTIVE_TCP + 3)
+#error "CONFIG_LWIP_MAX_SOCKETS must be >= CONFIG_LWIP_MAX_ACTIVE_TCP + 3. " \
+       "httpd uses 3 sockets internally (1 listen + 2 ctrl pipe). " \
+       "Increase CONFIG_LWIP_MAX_SOCKETS or decrease CONFIG_LWIP_MAX_ACTIVE_TCP."
+#endif
+
 extern struct context_s m_context;
 /* A simple example that demonstrates how to create GET and POST
  * handlers for the web server.
@@ -113,7 +122,7 @@ httpd_handle_t start_webserver(void) {
                                         // LRU purge would silently abort an ongoing large upload
     config.recv_wait_timeout = 30;      // 30 second receive timeout (allow slow uploads / WiFi retransmits)
     config.send_wait_timeout = 30;      // 30 second send timeout
-    config.max_uri_handlers = 20;       // Limit URI handlers (adjust as needed)
+    config.max_uri_handlers = 8;        // Actual registered handlers + small headroom
 
     // Start the httpd server
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -163,9 +172,13 @@ unsigned int stop_webserver(httpd_handle_t server) {
 
 #define MDNS_INSTANCE "esp logger web server"
 #include "esp_mac.h"
-
+static uint8_t mdns_initialized = 0;
 static esp_err_t initialise_mdns(void) {
     FUNC_ENTRY(TAG);
+    if(mdns_initialized) {
+        WLOG(TAG, "mDNS already initialized");
+        return ESP_OK;
+    }
     // Ensure at least one WiFi netif exists and is up before starting mDNS
     const TickType_t wait_ticks = pdMS_TO_TICKS(5000);
     TickType_t start = xTaskGetTickCount();
@@ -222,6 +235,7 @@ static esp_err_t initialise_mdns(void) {
     }
     else {
         ILOG(TAG, "mDNS initialized with hostname: %s", hn);
+        mdns_initialized = 1;
     }
     return ret;
 }
@@ -229,6 +243,7 @@ static esp_err_t initialise_mdns(void) {
 static esp_err_t deinitialise_mdns(void) {
     esp_err_t ret = mdns_service_remove_all();
     mdns_free();
+    mdns_initialized = 0;
     return ret;
 }
 

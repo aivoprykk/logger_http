@@ -59,7 +59,7 @@
 uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size, unsigned int type)
 {
     unsigned int      n;
-    uint32_t       *escape;
+    const uint32_t *escape;
     static u_char   hex[] = "0123456789ABCDEF";
 
     /*
@@ -77,7 +77,7 @@ uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size, unsigned int typ
 
     /* " ", "#", "%", "?", not allowed */
 
-    static uint32_t   uri[] = {
+    static const uint32_t   uri[] = {
         0xffffffff, /* 1111 1111 1111 1111  1111 1111 1111 1111 */
 
         /* ?>=< ;:98 7654 3210  /.-, +*)( '&%$ #"!  */
@@ -97,7 +97,7 @@ uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size, unsigned int typ
 
     /* " ", "#", "%", "&", "+", ";", "?", not allowed */
 
-    static uint32_t   args[] = {
+    static const uint32_t   args[] = {
         0xffffffff, /* 1111 1111 1111 1111  1111 1111 1111 1111 */
 
         /* ?>=< ;:98 7654 3210  /.-, +*)( '&%$ #"!  */
@@ -117,7 +117,7 @@ uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size, unsigned int typ
 
     /* not ALPHA, DIGIT, "-", ".", "_", "~" */
 
-    static uint32_t   uri_component[] = {
+    static const uint32_t   uri_component[] = {
         0xffffffff, /* 1111 1111 1111 1111  1111 1111 1111 1111 */
 
         /* ?>=< ;:98 7654 3210  /.-, +*)( '&%$ #"!  */
@@ -137,7 +137,7 @@ uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size, unsigned int typ
 
     /* " ", "#", """, "%", "'", not allowed */
 
-    static uint32_t   html[] = {
+    static const uint32_t   html[] = {
         0xffffffff, /* 1111 1111 1111 1111  1111 1111 1111 1111 */
 
         /* ?>=< ;:98 7654 3210  /.-, +*)( '&%$ #"!  */
@@ -157,7 +157,7 @@ uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size, unsigned int typ
 
     /* " ", """, "'", not allowed */
 
-    static uint32_t   refresh[] = {
+    static const uint32_t   refresh[] = {
         0xffffffff, /* 1111 1111 1111 1111  1111 1111 1111 1111 */
 
         /* ?>=< ;:98 7654 3210  /.-, +*)( '&%$ #"!  */
@@ -177,7 +177,7 @@ uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size, unsigned int typ
 
     /* " ", "%", %00-%1F */
 
-    static uint32_t   memcached[] = {
+    static const uint32_t   memcached[] = {
         0xffffffff, /* 1111 1111 1111 1111  1111 1111 1111 1111 */
 
         /* ?>=< ;:98 7654 3210  /.-, +*)( '&%$ #"!  */
@@ -197,7 +197,7 @@ uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size, unsigned int typ
 
     /* mail_auth is the same as memcached */
 
-    static uint32_t  *map[] =
+    static const uint32_t * const map[] =
     { uri, args, uri_component, html, refresh, memcached, memcached };
 
 
