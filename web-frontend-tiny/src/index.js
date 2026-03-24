@@ -127,6 +127,7 @@
                     j.addEventListener('click', function (e) {
                         win.app.curobj.upload(e);
                     });
+                    j.setAttribute('disabled', 'true');
                 }
             },
             upload: function (url, callback) {
@@ -143,8 +144,11 @@
                         console.log('File input missing.');
                     return;
                 }
-                //var b = file.parentNode.querySelector('button');
-                var txt = file.parentNode.querySelector('.file-text');
+                var txt = document.querySelector('.upload-file .upload-submit');
+                if (txt) {
+                    txt.setAttribute('disabled', 'true');
+                }
+                txt = file.parentNode.querySelector('.file-text');
                 var textupdate = function (msg) {
                     if (txt) {
                         txt.innerHTML = msg;
@@ -193,6 +197,10 @@
                     var name = obj.name;
                     var fileName = name.split('\\|/');
                     self.filedone('Selected ' + fileName[fileName.length - 1] + ' (' + win.app.size(obj.size) + ')', true);
+                    var txt = document.querySelector('.upload-file .upload-submit');
+                    if (txt) {
+                        txt.removeAttribute('disabled');
+                    }
                     event.preventDefault();
                 }
             },
@@ -202,6 +210,7 @@
                     txt.innerHTML = msg;
                     txt = document.querySelector('.upload-file .upload-submit');
                     if (txt) {
+                        txt.setAttribute('disabled', 'true');
                         if (display) txt.classList.remove('hide');
                         else txt.classList.add('hide');
                     }
@@ -1080,16 +1089,19 @@
                     var y = slot.querySelector('[name=log_ubx_nav_sat]');
                     if(x && y) {
                         var tr = y.closest('tr');
-                        if(x.selectedIndex != 1) { // ubx == 1
-                            tr.classList.add('hide');
-                        }
-                        x.addEventListener('change', function () {
-                            if(x.selectedIndex != 1) {
+                        var updateUbxNavSatVisibility = function () {
+                            var option = x.options[x.selectedIndex];
+                            var selectedFormat = option
+                                ? String(option.text || option.innerText || '').trim().toLowerCase()
+                                : '';
+                            if (selectedFormat !== 'ubx') {
                                 tr.classList.add('hide');
-                            }  else {
+                            } else {
                                 tr.classList.remove('hide');
                             }
-                        });
+                        };
+                        updateUbxNavSatVisibility();
+                        x.addEventListener('change', updateUbxNavSatVisibility);
                     }
                     
                 }
